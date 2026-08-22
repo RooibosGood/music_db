@@ -226,12 +226,13 @@ VOICEVOX HTTP API を呼び出して音声を生成し、ALSA デバイスへ直
 
 ### 4.6 音声認識・ウェイクワードリスナー (`run_voice_loop`)
 
-バックグラウンドスレッドで常時マイク入力を監視します。
+バックグラウンドスレッドで常時マイク入力を監視します。起動時には開始アナウンス（「こんにちは！moOde AI アシスタントです。マイクに向かって『ヘイ、マスター』と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。」）が自動発話されます。
 
 #### 動作サイクル
 ```mermaid
 stateDiagram-v2
-    [*] --> Idle: 起動
+    [*] --> StartupGreeting: 起動
+    StartupGreeting --> Idle: 起動案内アナウンス
     Idle --> Recording: マイク録音 (4秒間)
     Recording --> Recognizing: faster-whisper (STT)
     Recognizing --> WakeWordCheck: テキスト判定

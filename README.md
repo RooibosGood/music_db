@@ -2,7 +2,9 @@
 
 NASなどのストレージに保存された楽曲ファイル（MP3 / FLAC）からタグ情報（ID3 / Vorbis）を抽出し、Web検索とLLM（Lemonade Server）を活用してリッチなメタデータ（ジャンル、ムード、エネルギーレベル、日本語の楽曲説明など）を生成して SQLite データベースに蓄積するツールです。
 
-> 📖 **Jetson Orin 等でのアプリ開発向けDB仕様書**: データベースの構造・カラム定義・SQL活用例・Text-to-SQL用プロンプト定義などは [DB_SPEC.md](DB_SPEC.md) をご覧ください。
+> 📖 **関連仕様書ドキュメント**:
+> - データベース設計・SQL活用例: [DB_SPEC.md](DB_SPEC.md)
+> - 音声＆Web AIアシスタント仕様書: [VOICE_BOT_SPEC.md](VOICE_BOT_SPEC.md)
 
 ---
 
@@ -167,7 +169,8 @@ python cleanup_long_tracks.py --minutes 30
 
 ## moOde 音声 & Web Chat AI システム (`voice_bot.py`)
 
-Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と **Webブラウザ（スマホ・PC）からのチャット入力** の双方から Raspberry Pi 5 上の moOde audio (MPD) をシームレスに操作・音楽再生できるAIアシスタントです。
+Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と **Webブラウザ（スマホ・PC）からのチャット入力** の双方から Raspberry Pi 5 上の moOde audio (MPD) をシームレスに操作・音楽再生できるAIアシスタントです。  
+> 📖 **詳細なシステム仕様・API・プロトコル定義**: [VOICE_BOT_SPEC.md](VOICE_BOT_SPEC.md) をご覧ください。
 
 ### 🌟 特徴
 - **ハイブリッド操作**: マイクに向かって「ヘイ、マスター、Jazzをかけて」と話しかけても、ブラウザのチャット欄に入力しても即座に反応

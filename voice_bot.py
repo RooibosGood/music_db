@@ -806,16 +806,21 @@ def command_after_wake_word(text: str) -> Optional[str]:
 
 def run_voice_loop():
     """音声待機・認識バックグラウンドスレッド"""
+    try:
+        greeting_msg = (
+            "こんにちは！moOde AI アシスタントです。"
+            "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
+        )
+        speak(greeting_msg)
+    except Exception:
+        pass
+
     init_whisper()
     if stt_model is None or pyaudio is None:
         print("🎙️ 音声入力デバイスまたはモデルが利用できないため、音声リスナーを停止します。（Web Chatは利用可能です）")
         return
 
     print("🎙️ 音声アシスタント待機ループを開始しました。(「ヘイ、マスター」)", flush=True)
-    try:
-        speak("「ヘイ、マスター」と呼びかけてください。")
-    except Exception:
-        pass
 
     while True:
         try:
@@ -990,6 +995,13 @@ def main():
     if not args.no_voice:
         voice_thread = threading.Thread(target=run_voice_loop, daemon=True)
         voice_thread.start()
+    else:
+        # no-voice時も起動案内を発話
+        greeting_msg = (
+            "こんにちは！moOde AI アシスタントです。"
+            "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
+        )
+        threading.Thread(target=speak, args=(greeting_msg,), daemon=True).start()
 
     # Webサーバー (FastAPI + Uvicorn) 起動
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

@@ -1,8 +1,10 @@
 import os
+import sys
 import sqlite3
 import json
 import re
 import argparse
+import traceback
 from pathlib import Path
 from mutagen import File
 from openai import OpenAI
@@ -16,6 +18,7 @@ import time
 NAS_MUSIC_DIR = r"\\homenas\music"
 DB_PATH = "music_meta.db"
 LEMONADE_BASE_URL = "http://localhost:13305/v1"
+MAX_DURATION_SECONDS = 20 * 60  # 20分（1200秒）以上のファイルは除外
 
 ALLOWED_GENRES = [
     "ジャズ",
@@ -42,70 +45,119 @@ def get_active_model_name() -> str:
         if models.data:
             return models.data[0].id
     except Exception as e:
-        print(f"[Warning] モデル一覧の取得に失敗しました: {e}")
+        print(f"\n[Error] Lemonade Server ({LEMONADE_BASE_URL}) への接続・モデル取得に失敗しました: {e}")
+        print("  Lemonade Server が起動しているか確認してください。")
+        sys.exit(1)
     return "default"
 
 ACTIVE_MODEL = get_active_model_name()
 print(f"[System] 使用モデル: {ACTIVE_MODEL}")
 
 def init_db(reset: bool = False):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    if reset:
-        print("[System] 既存データを削除してデータベースを初期化します。")
-        cur.execute("DROP TABLE IF EXISTS tracks;")
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS tracks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        file_path TEXT UNIQUE NOT NULL,
-        relative_path TEXT,
-        file_format TEXT,
-        is_hires INTEGER DEFAULT 0,
-        sample_rate INTEGER,
-        bit_depth INTEGER,
-        title TEXT,
-        artist TEXT,
-        album TEXT,
-        release_year INTEGER,
-        music_category TEXT,
-        genre TEXT,
-        mood TEXT,
-        energy_level INTEGER,
-        composer TEXT,
-        performers TEXT,
-        description TEXT,
-        analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-    # 既存DBへのカラムマイグレーション対応
-    cur.execute("PRAGMA table_info(tracks);")
-    columns = [col[1] for col in cur.fetchall()]
-    if "file_format" not in columns:
-        cur.execute("ALTER TABLE tracks ADD COLUMN file_format TEXT;")
-    if "is_hires" not in columns:
-        cur.execute("ALTER TABLE tracks ADD COLUMN is_hires INTEGER DEFAULT 0;")
-    if "sample_rate" not in columns:
-        cur.execute("ALTER TABLE tracks ADD COLUMN sample_rate INTEGER;")
-    if "bit_depth" not in columns:
-        cur.execute("ALTER TABLE tracks ADD COLUMN bit_depth INTEGER;")
-    if "music_category" not in columns:
-        cur.execute("ALTER TABLE tracks ADD COLUMN music_category TEXT;")
-    conn.commit()
-    return conn
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        if reset:
+            print("[System] 既存データを削除してデータベースを初期化します。")
+            cur.execute("DROP TABLE IF EXISTS tracks;")
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS tracks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT UNIQUE NOT NULL,
+            relative_path TEXT,
+            file_format TEXT,
+            is_hires INTEGER DEFAULT 0,
+            sample_rate INTEGER,
+            bit_depth INTEGER,
+            duration_seconds INTEGER,
+            title TEXT,
+            artist TEXT,
+            album TEXT,
+            release_year INTEGER,
+            music_category TEXT,
+            genre TEXT,
+            mood TEXT,
+            energy_level INTEGER,
+            composer TEXT,
+            performers TEXT,
+            description TEXT,
+            analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        # 既存DBへのカラムマイグレーション対応
+        cur.execute("PRAGMA table_info(tracks);")
+        columns = [col[1] for col in cur.fetchall()]
+        if "file_format" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN file_format TEXT;")
+        if "is_hires" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN is_hires INTEGER DEFAULT 0;")
+        if "sample_rate" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN sample_rate INTEGER;")
+        if "bit_depth" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN bit_depth INTEGER;")
+        if "duration_seconds" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN duration_seconds INTEGER;")
+        if "music_category" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN music_category TEXT;")
+        conn.commit()
+        return conn
+    except Exception as e:
+        print(f"\n[Error] データベース初期化に失敗しました ({DB_PATH}): {e}")
+        traceback.print_exc()
+        sys.exit(1)
+
+def cleanup_long_tracks_from_db(conn):
+    """既存DB内に登録されている20分（1200秒）以上の楽曲を削除"""
+    try:
+        cur = conn.cursor()
+        # duration_seconds >= 1200 のものを抽出
+        cur.execute("SELECT id, title, artist, file_path, duration_seconds FROM tracks WHERE duration_seconds >= ?", (MAX_DURATION_SECONDS,))
+        rows = cur.fetchall()
+        
+        # duration_seconds が未設定（NULL）のレコードもタグを再確認
+        cur.execute("SELECT id, title, artist, file_path FROM tracks WHERE duration_seconds IS NULL;")
+        null_rows = cur.fetchall()
+        for row_id, title, artist, file_path in null_rows:
+            if os.path.exists(file_path):
+                try:
+                    audio = File(file_path, easy=True)
+                    length = int(getattr(audio.info, "length", 0)) if audio and audio.info else 0
+                    if length >= MAX_DURATION_SECONDS:
+                        rows.append((row_id, title, artist, file_path, length))
+                    else:
+                        cur.execute("UPDATE tracks SET duration_seconds = ? WHERE id = ?", (length, row_id))
+                except Exception:
+                    pass
+
+        if rows:
+            print(f"[Cleanup] データベース内に20分以上のファイルが {len(rows)} 件見つかりました。削除します:")
+            for row_id, title, artist, file_path, dur in rows:
+                dur_min = (dur or 0) / 60
+                print(f"  - 削除: ID={row_id} | {artist} - {title} ({dur_min:.1f}分) | {Path(file_path).name}")
+                cur.execute("DELETE FROM tracks WHERE id = ?", (row_id,))
+            conn.commit()
+            print(f"[Cleanup] {len(rows)} 件の長尺ファイルをデータベースから除外しました。\n")
+        else:
+            conn.commit()
+    except Exception as e:
+        print(f"[Warning] 既存長尺ファイルのクリーンアップ中にエラーが発生しました: {e}")
 
 def extract_tags(file_path: str):
-    """MP3 / FLAC からID3/Vorbisタグおよびオーディオ仕様（フォーマット・ハイレゾ判定）を抽出"""
+    """MP3 / FLAC からID3/Vorbisタグおよびオーディオ仕様（フォーマット・ハイレゾ判定・再生時間）を抽出"""
     try:
         audio = File(file_path, easy=True)
         if audio is None:
-            return None
+            print(f"\n[Error] 音源ファイルとして読み込めませんでした: {file_path}")
+            sys.exit(1)
         
         ext = Path(file_path).suffix.lstrip('.').lower()
         sample_rate = None
         bit_depth = None
+        duration_seconds = None
         if audio.info:
             sample_rate = getattr(audio.info, "sample_rate", None)
             bit_depth = getattr(audio.info, "bits_per_sample", None)
+            duration_seconds = int(getattr(audio.info, "length", 0))
         
         # ハイレゾ判定: 可逆圧縮/非圧縮音源で、サンプリングレートが48kHz超または量子化ビット数が16bit超
         is_lossless = ext in ("flac", "wav", "aiff", "alac", "dsd", "dsf", "dff")
@@ -119,11 +171,14 @@ def extract_tags(file_path: str):
             "file_format": ext,
             "sample_rate": sample_rate,
             "bit_depth": bit_depth,
+            "duration_seconds": duration_seconds,
             "is_hires": is_hires
         }
     except Exception as e:
-        print(f"  [Tag Error] {file_path}: {e}")
-        return None
+        print(f"\n[Error] タグ抽出中にエラーが発生しました: {file_path}")
+        print(f"  詳細: {type(e).__name__} - {e}")
+        traceback.print_exc()
+        sys.exit(1)
 
 def search_web_info(title: str, artist: str) -> str:
     """楽曲の背景やエピソードをWeb検索"""
@@ -328,6 +383,11 @@ Output strictly a JSON object with these keys:
 def process_music_library(limit: int = None, reset: bool = False, target_format: str = "all"):
     conn = init_db(reset=reset)
     cur = conn.cursor()
+    
+    # 既存DB内の20分以上の長尺音源をクリーンアップ
+    if not reset:
+        cleanup_long_tracks_from_db(conn)
+
     processed_count = 0
     attempt_count = 0
     skipped_count = 0
@@ -346,6 +406,7 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
     print(f"=== スキャン開始: {NAS_MUSIC_DIR} ===")
     print(f"  実行モード: {mode_name}")
     print(f"  対象形式: {format_label}")
+    print(f"  除外条件: 再生時間 {MAX_DURATION_SECONDS // 60}分 以上のファイル")
     print(f"  処理上限: {f'新規 {limit} 曲' if limit else '無制限'}\n")
 
     for root, _, files in os.walk(NAS_MUSIC_DIR):
@@ -373,7 +434,15 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                     return
                 continue
 
-            print(f"  基本情報: {tags['title']} / {tags['artist']} [{tags['file_format'].upper()}{' (Hi-Res)' if tags['is_hires'] else ''}]")
+            # 再生時間が20分以上のファイルを除外（スキップ）
+            if tags.get("duration_seconds") and tags["duration_seconds"] >= MAX_DURATION_SECONDS:
+                dur_min = tags["duration_seconds"] / 60
+                print(f"  [Skip] 再生時間が20分以上の長尺音源のためスキップします ({dur_min:.1f}分)")
+                skipped_count += 1
+                continue
+
+            dur_str = f"{tags['duration_seconds'] // 60}:{tags['duration_seconds'] % 60:02d}" if tags.get("duration_seconds") else "不明"
+            print(f"  基本情報: {tags['title']} / {tags['artist']} [{tags['file_format'].upper()}{' (Hi-Res)' if tags['is_hires'] else ''} | {dur_str}]")
             web_context = search_web_info(tags["title"], tags["artist"])
             
             try:
@@ -383,11 +452,11 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                 
                 cur.execute("""
                 INSERT INTO tracks (
-                    file_path, relative_path, file_format, is_hires, sample_rate, bit_depth,
+                    file_path, relative_path, file_format, is_hires, sample_rate, bit_depth, duration_seconds,
                     title, artist, album,
                     release_year, music_category, genre, mood, energy_level, composer, performers, description
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     full_path,
                     rel_path,
@@ -395,6 +464,7 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                     tags["is_hires"],
                     tags["sample_rate"],
                     tags["bit_depth"],
+                    tags["duration_seconds"],
                     tags["title"],
                     tags["artist"],
                     tags["album"],
@@ -411,7 +481,14 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                 processed_count += 1
 
             except Exception as e:
-                print(f"  [LLM/DB Error] {full_path}: {type(e).__name__} - {e}")
+                print(f"\n[Error] メタデータ解析またはDB登録中にエラーが発生したため、処理を停止します。")
+                print(f"  対象ファイル: {full_path}")
+                print(f"  エラー種類: {type(e).__name__}")
+                print(f"  エラー詳細: {e}")
+                print("\n--- トレースバック ---")
+                traceback.print_exc()
+                conn.close()
+                sys.exit(1)
 
             if limit and attempt_count >= limit:
                 print(f"\n=== 試行上限 {limit} 曲に達したため終了します ===")
@@ -437,4 +514,8 @@ if __name__ == "__main__":
     is_reset = args.reset or (args.mode == "reset")
     target_format = "flac" if args.flac_only else args.format
     
-    process_music_library(limit=limit_val, reset=is_reset, target_format=target_format)
+    try:
+        process_music_library(limit=limit_val, reset=is_reset, target_format=target_format)
+    except KeyboardInterrupt:
+        print("\n[System] ユーザーによって処理が中断されました。")
+        sys.exit(0)
