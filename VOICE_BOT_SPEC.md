@@ -108,6 +108,7 @@ flowchart TB
 ```text
 fastapi>=0.100.0
 uvicorn>=0.22.0
+websockets>=12.0
 python-mpd2>=3.1.0
 faster-whisper>=0.10.0
 pyaudio>=0.2.13
@@ -129,7 +130,8 @@ pydantic>=2.0.0
 | `OLLAMA_CHAT_URL` | `"http://localhost:11434/api/chat"` | Ollama チャット API エンドポイント |
 | `SPEAKER_ID` | `13` | VOICEVOX 話者ID（青山龍星） |
 | `LLM_MODEL` | `"qwen3.5:2b"` | Ollama で使用する LLM モデル名 |
-| `AUDIO_OUTPUT_DEV` | `"plughw:0,0"` | 音声出力先 ALSA デバイス名 |
+| `AUDIO_OUTPUT_NAME` | `"Sennheiser"` | 自動検出対象の音声出力デバイス名（部分一致） |
+| `AUDIO_OUTPUT_DEV` | `None`（自動検出） | 音声出力先 ALSA デバイス名（`plughw:1,0`、`default` 等） |
 | `INPUT_DEVICE_NAME` | `"Sennheiser SP 20"` | マイク入力デバイス名（部分一致） |
 | `DB_PATH` | `"music_meta.db"` | SQLite データベースファイルパス |
 | `RECORD_SECONDS` | `4` | マイク録音の1サイクル時間（秒） |
@@ -459,6 +461,7 @@ stateDiagram-v2
 | :--- | :--- | :--- | :--- |
 | `--moode-ip` | `string` | `192.168.68.198` | moOde audio (Raspberry Pi) の IP アドレス |
 | `--moode-port`| `int` | `6600` | moOde audio の MPD ポート番号 |
+| `--audio-dev` | `string` | `None`（自動検出） | 音声出力先 ALSA デバイス（例: `plughw:1,0`, `default`） |
 | `--host` | `string` | `0.0.0.0` | FastAPI Web サーバーのバインドホスト |
 | `--port` | `int` | `8000` | FastAPI Web サーバーのポート番号 |
 | `--no-voice` | フラグ | `False` | マイク音声リスナースレッドを起動しない（Web専用モード） |

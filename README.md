@@ -179,6 +179,12 @@ Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と 
 - **SQLite DB 連携**: `music_meta.db` のリッチなメタデータ（ムード、エネルギー、ハイレゾ、ジャンル）を活用した選曲
 - **VOICEVOX 音声読み上げ**: Jetson スピーカーからの自然な音声返答（Web UI 上で音声出力のON/OFF切り替え可能）
 
+### 📦 必要パッケージのインストール
+
+```bash
+pip install fastapi uvicorn websockets python-mpd2 faster-whisper pyaudio pydantic
+```
+
 ### 🚀 起動方法
 
 ```bash

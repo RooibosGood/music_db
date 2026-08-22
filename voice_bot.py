@@ -48,7 +48,8 @@ VOICEVOX_URL = "http://localhost:50021"
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 SPEAKER_ID = 13  # 青山龍星（落ち着いた男性音声）
 LLM_MODEL = "qwen3.5:2b"
-AUDIO_OUTPUT_DEV = "plughw:0,0"  # Sennheiser SP 20 (カード0, デバイス0)
+AUDIO_OUTPUT_NAME = "Sennheiser"  # 再生デバイス名（部分一致で自動検索）
+AUDIO_OUTPUT_DEV = None  # Noneの場合は自動検出、または "plughw:1,0" 等
 VOICE_PRE_SILENCE_SEC = 0.3  # 再生開始時の音切れ防止用
 INPUT_DEVICE_NAME = "Sennheiser SP 20"  # PyAudioの表示名に含まれる文字列
 INPUT_DEVICE_INDEX = None  # 名前で見つからない場合に使うPyAudio番号
@@ -394,8 +395,39 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ==================== 音声合成 & 出力 (VOICEVOX) ====================
+def detect_alsa_output_device(target_name: str = "Sennheiser") -> str:
+    """aplay -l からターゲットデバイス名に一致する ALSA デバイス (plughw:X,Y) を自動検出"""
+    if os.name == "nt":
+        return "default"
+    try:
+        res = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
+        if res.returncode == 0:
+            lines = res.stdout.splitlines()
+            for line in lines:
+                if target_name.lower() in line.lower() or "sp 20" in line.lower() or "sp20" in line.lower():
+                    card_match = re.search(r"(?:card|カード)\s*(\d+)", line, re.IGNORECASE)
+                    dev_match = re.search(r"(?:device|デバイス)\s*(\d+)", line, re.IGNORECASE)
+                    card_idx = card_match.group(1) if card_match else None
+                    dev_idx = dev_match.group(1) if dev_match else "0"
+                    if card_idx is not None:
+                        dev_str = f"plughw:{card_idx},{dev_idx}"
+                        return dev_str
+            for line in lines:
+                if "usb audio" in line.lower() or "usb-audio" in line.lower():
+                    card_match = re.search(r"(?:card|カード)\s*(\d+)", line, re.IGNORECASE)
+                    dev_match = re.search(r"(?:device|デバイス)\s*(\d+)", line, re.IGNORECASE)
+                    card_idx = card_match.group(1) if card_match else None
+                    dev_idx = dev_match.group(1) if dev_match else "0"
+                    if card_idx is not None:
+                        return f"plughw:{card_idx},{dev_idx}"
+    except Exception as e:
+        print(f"⚠️ [Audio Output] デバイス検出エラー: {e}")
+    return "default"
+
+
 def speak(text: str):
     """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力"""
+    global AUDIO_OUTPUT_DEV
     if not text:
         return
     with voice_lock:
@@ -434,13 +466,15 @@ def speak(text: str):
 
             # 4. aplay による再生
             if os.name != "nt":
-                # 指定デバイス (plughw:0,0) で再生を試みる
-                print(f"🔊 [aplay] 再生中 ({AUDIO_OUTPUT_DEV})...", flush=True)
-                aplay_res = subprocess.run(["aplay", "-D", AUDIO_OUTPUT_DEV, "-q", temp_wav], capture_output=True)
+                target_dev = AUDIO_OUTPUT_DEV or detect_alsa_output_device(AUDIO_OUTPUT_NAME)
+                print(f"🔊 [aplay] 再生中 ({target_dev})...", flush=True)
+                aplay_res = subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], capture_output=True)
                 if aplay_res.returncode != 0:
-                    print(f"⚠️ [aplay] -D {AUDIO_OUTPUT_DEV} 失敗 (code {aplay_res.returncode}): {aplay_res.stderr.decode('utf-8', errors='ignore')}")
-                    print("🔊 [aplay] デフォルトデバイス (default) で再試行中...", flush=True)
-                    subprocess.run(["aplay", "-D", "default", "-q", temp_wav], check=False)
+                    err_msg = aplay_res.stderr.decode('utf-8', errors='ignore').strip()
+                    print(f"⚠️ [aplay] -D {target_dev} 失敗 (code {aplay_res.returncode}): {err_msg}")
+                    if target_dev != "default":
+                        print("🔊 [aplay] デフォルトデバイス (default) で再試行中...", flush=True)
+                        subprocess.run(["aplay", "-D", "default", "-q", temp_wav], check=False)
             else:
                 try:
                     import winsound
@@ -971,11 +1005,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
 # ==================== メイン実行 ====================
 def main():
-    global MOODE_IP, MOODE_PORT
+    global MOODE_IP, MOODE_PORT, AUDIO_OUTPUT_DEV
 
     parser = argparse.ArgumentParser(description="moOde AI Master (Voice & Web Chat Assistant)")
     parser.add_argument("--moode-ip", type=str, default=MOODE_IP, help="moOde (MPD) IP address")
     parser.add_argument("--moode-port", type=int, default=MOODE_PORT, help="moOde (MPD) port")
+    parser.add_argument("--audio-dev", type=str, default=None, help="Audio output ALSA device (e.g. plughw:1,0, default)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Web server host")
     parser.add_argument("--port", type=int, default=8000, help="Web server port")
     parser.add_argument("--no-voice", action="store_true", help="Disable microphone voice listener thread")
@@ -984,9 +1019,15 @@ def main():
     MOODE_IP = args.moode_ip
     MOODE_PORT = args.moode_port
 
+    if args.audio_dev:
+        AUDIO_OUTPUT_DEV = args.audio_dev
+    else:
+        AUDIO_OUTPUT_DEV = detect_alsa_output_device(AUDIO_OUTPUT_NAME)
+
     print("=" * 60)
     print(" 🎵 moOde AI Master (Voice & Web Chat Assistant)")
     print(f" 📡 moOde IP : {MOODE_IP}:{MOODE_PORT}")
+    print(f" 🔊 音声出力 : {AUDIO_OUTPUT_DEV}")
     print(f" 🌐 Web UI   : http://{args.host}:{args.port} (ブラウザでアクセス)")
     print(f" 🎙️ 音声入力 : {'無効 (--no-voice)' if args.no_voice else '有効 (ヘイ、マスター)'}")
     print("=" * 60)
