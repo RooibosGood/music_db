@@ -148,19 +148,23 @@ pydantic>=2.0.0
 
 ### 4.2 SQLite データベース連携モジュール (`find_track_metadata`)
 
-moOde で再生中または検索された楽曲に対応するメタデータを `music_meta.db` から検索します。
+### 4.2 SQLite データベース選曲モジュール (`search_tracks_from_db`, `find_track_metadata`)
 
-#### 検索優先順位
-1. **ファイル名 / パス検索**: `file_path LIKE ? OR relative_path LIKE ? OR relative_path = ?`
-2. **タイトル ＋ アーティスト検索**: `title LIKE ? AND artist LIKE ?`
-3. **タイトル検索**: `title LIKE ?`
+ユーザーからの要望（ジャンル、ムード、エネルギー、ハイレゾ、アーティスト名、曲名、フリーワード等）に基づき、**`music_meta.db` を直接クエリして楽曲を選定**します。
 
-#### 取得項目
-`id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description`
+#### 1. 楽曲抽出ルール (`search_tracks_from_db`)
+- **ジャンル判定**: 「ジャズ」「ロック」「ポップ」「クラシック」等を SQL `genre LIKE '%ジャンル名%'` で検索。
+- **ムード / エネルギー**: 「静かな曲」「リラックス」→ `energy_level <= 2`、「アップテンポ」「元気」→ `energy_level >= 4`。
+- **ハイレゾ判定**: 「ハイレゾ」「高音質」→ `is_hires = 1`。
+- **キーワード検索**: アーティスト名、曲名、アルバム名、解説文に対するあいまい検索。
+- **ソート**: リッチな解説文（`description`）が存在する楽曲を最優先し、ランダム順で最大15曲を抽出。
+
+#### 2. メタデータ照合 (`find_track_metadata`)
+moOde の再生中楽曲から `music_meta.db` のレコードを逆引きし、解説文やハイレゾ判定情報を取得。
 
 ---
 
-### 4.3 MPD / moOde 制御モジュール (`control_moode`, `get_moode_status`)
+### 4.3 MPD / moOde 制御モジュール (`control_moode`, `add_db_tracks_to_mpd`, `get_moode_status`)
 
 #### 状態取得 (`get_moode_status`)
 - MPD の `status()` および `currentsong()` を取得。
@@ -170,7 +174,7 @@ moOde で再生中または検索された楽曲に対応するメタデータ�
 #### アクション一覧 (`control_moode`)
 | アクション (`action`) | パラメータ | 動作内容 |
 | :--- | :--- | :--- |
-| `play_search` | `query` (文字列) | 1. 日本語ジャンル名（例: 「ジャズ」→「Jazz」）の正規化<br/>2. MPDライブラリ検索（genre ➔ any ➔ 単語分割検索）<br/>3. キューをクリアし、検索結果の上位15曲を追加<br/>4. 1曲目のDB解説文（`description`）を取得<br/>5. 音声案内（曲名・アーティスト・解説文）の発話完了後に音楽再生を開始 |
+| `play_search` | `query` (文字列) | 1. **`music_meta.db` から合致する楽曲リストを抽出**<br/>2. 抽出された楽曲のファイル名・タイトルで MPD 内を検索し、キューに追加<br/>3. 1曲目のDB解説文（`description`）を取得<br/>4. **音声案内（曲名・アーティスト・解説文）の発話完了後に音楽再生を開始** |
 | `play` | - | 再生を再開 (`client.play()`) |
 | `pause` | - | 一時停止 (`client.pause(1)`) |
 | `stop` | - | 停止 (`client.stop()`) |

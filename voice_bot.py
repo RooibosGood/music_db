@@ -169,6 +169,164 @@ def find_track_metadata(
     return None
 
 
+# ==================== SQLite DB 楽曲検索 & 選曲 ====================
+def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
+    """music_meta.db からユーザー要望（ジャンル、ムード、エネルギー、ハイレゾ、アーティスト、曲名等）に合致する楽曲を抽出"""
+    if not os.path.exists(DB_PATH):
+        print(f"⚠️ [DB] {DB_PATH} が存在しません。")
+        return []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        clean_q = query.strip()
+        conditions = []
+        params = []
+
+        # 1. ジャンル判定マッピング
+        genre_keywords = {
+            "ジャズ": "ジャズ", "jazz": "ジャズ",
+            "ロック": "ロック", "rock": "ロック",
+            "ポップ": "ポップ", "ポップス": "ポップ", "pop": "ポップ",
+            "クラシック": "クラシック", "classic": "クラシック", "classical": "クラシック",
+            "ブルース": "ブルース", "blues": "ブルース",
+            "ソウル": "R&B・ソウル", "r&b": "R&B・ソウル", "rnb": "R&B・ソウル",
+            "エレクトロニック": "エレクトロニック", "テクノ": "エレクトロニック", "edm": "エレクトロニック",
+            "フォーク": "フォーク・カントリー", "カントリー": "フォーク・カントリー",
+            "ヒップホップ": "ヒップホップ", "hiphop": "ヒップホップ", "ラップ": "ヒップホップ",
+            "サントラ": "サウンドトラック・インスト", "サウンドトラック": "サウンドトラック・インスト", "インスト": "サウンドトラック・インスト",
+        }
+
+        matched_genres = [db_genre for kw, db_genre in genre_keywords.items() if kw in clean_q.lower()]
+        if matched_genres:
+            genre_clause = " OR ".join(["genre LIKE ?" for _ in matched_genres])
+            conditions.append(f"({genre_clause})")
+            params.extend([f"%{g}%" for g in matched_genres])
+
+        # 2. ハイレゾ判定
+        if any(k in clean_q.lower() for k in ["ハイレゾ", "hires", "hi-res", "高音質"]):
+            conditions.append("is_hires = 1")
+
+        # 3. エネルギー / 気分判定
+        if any(k in clean_q for k in ["静か", "落ち着", "リラックス", "穏やか", "眠", "バラード", "癒"]):
+            conditions.append("(energy_level <= 2 OR mood LIKE '%Calm%' OR mood LIKE '%Relax%')")
+        elif any(k in clean_q for k in ["元気", "激し", "アップテンポ", "ノリ", "ドライブ", "テンション"]):
+            conditions.append("(energy_level >= 4 OR mood LIKE '%Energetic%' OR mood LIKE '%Upbeat%')")
+
+        # 4. 邦楽 / 洋楽判定
+        if any(k in clean_q for k in ["邦楽", "j-pop", "jpop", "日本の曲", "日本語"]):
+            conditions.append("music_category = '邦楽'")
+        elif any(k in clean_q for k in ["洋楽", "海外"]):
+            conditions.append("music_category = '洋楽'")
+
+        # 5. 一般キーワード（アーティスト名、曲名、アルバム名、解説文）
+        stop_words = ["をかけて", "を流して", "を再生して", "かけて", "流して", "再生して", "聴きたい", "聴かせて", "曲", "音楽"]
+        keyword_q = clean_q
+        for sw in stop_words:
+            keyword_q = keyword_q.replace(sw, "").strip()
+
+        if keyword_q and not matched_genres:
+            words = keyword_q.split()
+            kw_conditions = []
+            for w in words:
+                kw_conditions.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR description LIKE ?)")
+                params.extend([f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%"])
+            if kw_conditions:
+                conditions.append(" AND ".join(kw_conditions))
+
+        where_sql = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        # description がある曲を最優先し、ランダム順で抽出
+        sql = f"""
+            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+            FROM tracks
+            {where_sql}
+            ORDER BY (CASE WHEN description IS NOT NULL AND description != '' THEN 0 ELSE 1 END), RANDOM()
+            LIMIT {limit};
+        """
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+
+        # ヒットしなかった場合、キーワードの部分一致でフォールバック
+        if not rows and keyword_q:
+            cur.execute(f"""
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                FROM tracks
+                WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description LIKE ?
+                ORDER BY (CASE WHEN description IS NOT NULL AND description != '' THEN 0 ELSE 1 END), RANDOM()
+                LIMIT {limit};
+            """, (f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%"))
+            rows = cur.fetchall()
+
+        # それでもヒットしない場合、ランダムに曲を取得
+        if not rows:
+            cur.execute(f"""
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                FROM tracks
+                WHERE description IS NOT NULL AND description != ''
+                ORDER BY RANDOM()
+                LIMIT {limit};
+            """)
+            rows = cur.fetchall()
+
+        conn.close()
+        return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"⚠️ [DB検索エラー]: {e}")
+        return []
+
+
+def add_db_tracks_to_mpd(client: Any, db_tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """DB検索結果の楽曲を MPD のキューに追加し、追加に成功した楽曲リストを返す"""
+    added_tracks = []
+    for track in db_tracks:
+        rel_path = track.get("relative_path") or ""
+        fname = rel_path.replace("\\", "/").split("/")[-1] if rel_path else ""
+        title = track.get("title") or fname
+        artist = track.get("artist") or ""
+
+        added = False
+        # 1. ファイル名で MPD 検索
+        if fname:
+            try:
+                search_res = client.search("file", fname)
+                if not search_res:
+                    search_res = client.search("any", fname)
+                if search_res:
+                    client.add(search_res[0]["file"])
+                    added_tracks.append(track)
+                    added = True
+            except Exception:
+                pass
+
+        # 2. タイトル＆アーティストで MPD 検索
+        if not added and title:
+            try:
+                if artist and artist != "アーティスト未設定" and artist != "Unknown":
+                    search_res = client.search("title", title, "artist", artist)
+                else:
+                    search_res = client.search("title", title)
+                if search_res:
+                    client.add(search_res[0]["file"])
+                    added_tracks.append(track)
+                    added = True
+            except Exception:
+                pass
+
+        # 3. 直接パスでの追加試行 (moOde の相対パス)
+        if not added and rel_path:
+            norm_rel = rel_path.replace("\\", "/")
+            try:
+                client.add(norm_rel)
+                added_tracks.append(track)
+                added = True
+            except Exception:
+                pass
+
+    return added_tracks
+
+
 # ==================== MPD (moOde) 制御 ====================
 def get_mpd_client() -> Optional[Any]:
     """MPD クライアントの接続を取得"""
@@ -251,7 +409,7 @@ def get_moode_status() -> Dict[str, Any]:
 
 
 def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
-    """MPD 経由で moOde audio を操作し、結果詳細および1曲目の解説文を返す"""
+    """music_meta.db から選曲し、MPD 経由で moOde audio を操作"""
     action = command.get("action")
     query = command.get("query", "").strip()
     result = {
@@ -277,91 +435,40 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if action == "play_search":
             client.clear()
-            search_results = []
 
-            # 1. moOde MPD ライブラリ内の直接検索 (確実なファイルパスを取得)
-            genre_map = {
-                "ジャズ": "Jazz", "jazz": "Jazz", "JAZZ": "Jazz",
-                "ロック": "Rock", "rock": "Rock",
-                "ポップ": "Pop", "ポップス": "Pop",
-                "クラシック": "Classical",
-                "ブルース": "Blues",
-            }
-            genre_query = genre_map.get(query, query)
+            print(f"🔍 [music_meta.db] 楽曲検索中: query='{query}'", flush=True)
+            db_tracks = search_tracks_from_db(query, limit=15)
+            print(f"📊 [music_meta.db] 該当曲数: {len(db_tracks)} 件", flush=True)
 
-            print(f"🔍 [moOde] MPD 検索中: genre='{genre_query}' または any='{query}'", flush=True)
-            try:
-                search_results = client.search("genre", genre_query)
-            except Exception:
-                search_results = []
+            if db_tracks:
+                added_tracks = add_db_tracks_to_mpd(client, db_tracks)
+                added_count = len(added_tracks)
 
-            if not search_results and genre_query != query:
-                try:
-                    search_results = client.search("genre", query)
-                except Exception:
-                    pass
+                # MPD追加成功曲があればそれをベースに、なければDB検索1件目を使用
+                first_track = added_tracks[0] if added_tracks else db_tracks[0]
+                first_title = first_track.get("title", "未設定")
+                first_artist = first_track.get("artist", "アーティスト未設定")
+                description = first_track.get("description", "")
 
-            if not search_results:
-                try:
-                    search_results = client.search("any", query)
-                except Exception:
-                    pass
+                result["tracks_added"] = [t.get("title", "") for t in added_tracks]
+                result["track_info"] = {
+                    "title": first_title,
+                    "artist": first_artist,
+                    "file": first_track.get("relative_path", ""),
+                }
+                result["description"] = description
+                result["success"] = True
+                result["needs_playback"] = True
+                result["message"] = f"「{query}」に該当する楽曲 ({len(db_tracks)}曲) をセットしました。"
 
-            if not search_results:
-                # 検索クエリを分割してあいまい検索
-                words = query.split()
-                if words:
-                    try:
-                        search_results = client.search("any", words[0])
-                    except Exception:
-                        pass
-
-            if search_results:
-                added_count = 0
-                for song in search_results[:15]:
-                    song_file = song.get("file")
-                    if not song_file:
-                        continue
-                    try:
-                        client.add(song_file)
-                        title = song.get("title") or song_file.split("/")[-1]
-                        result["tracks_added"].append(title)
-                        added_count += 1
-                    except Exception as add_err:
-                        print(f"⚠️ [moOde] client.add('{song_file}') エラー: {add_err}")
-
-                if added_count > 0:
-                    result["success"] = True
-                    result["needs_playback"] = True
-
-                    # 1曲目のメタデータと DB からの description 取得
-                    first_song = search_results[0]
-                    first_file = first_song.get("file", "")
-                    first_title = first_song.get("title") or first_file.split("/")[-1]
-                    first_artist = first_song.get("artist") or "アーティスト未設定"
-
-                    # DBから解説文を検索
-                    db_meta = find_track_metadata(file_path=first_file, title=first_title, artist=first_artist)
-                    description = db_meta.get("description", "") if db_meta else ""
-
-                    result["track_info"] = {
-                        "title": first_title,
-                        "artist": first_artist,
-                        "file": first_file,
-                    }
-                    result["description"] = description
-                    result["message"] = f"「{query}」に該当する楽曲 ({added_count}曲) をセットしました。"
-                    print(f"🎵 [moOde] '{query}' の楽曲をセットしました ({added_count}曲 追加)", flush=True)
-                    if description:
-                        print(f"📖 [Description 取得成功] {description}", flush=True)
-                    else:
-                        print(f"ℹ️ [Description] DB内に解説文が見つかりませんでした (file='{first_file}', title='{first_title}', artist='{first_artist}')", flush=True)
+                print(f"🎵 [moOde] '{query}' の楽曲をセットしました ({added_count}曲 キュー追加)", flush=True)
+                if description:
+                    print(f"📖 [Description 取得成功] {description}", flush=True)
                 else:
-                    result["message"] = "楽曲の追加に失敗しました。"
-                    print("⚠️ [moOde] 楽曲を追加できませんでした。", flush=True)
+                    print(f"ℹ️ [Description] DB内に解説文が見つかりませんでした (title='{first_title}', artist='{first_artist}')", flush=True)
             else:
-                result["message"] = f"「{query}」に該当する曲がライブラリに見つかりませんでした。"
-                print(f"⚠️ [moOde] '{query}' に該当する曲が見つかりません", flush=True)
+                result["message"] = f"「{query}」に該当する曲がデータベースに見つかりませんでした。"
+                print(f"⚠️ [music_meta.db] '{query}' に該当する曲が見つかりません", flush=True)
 
         elif action == "play":
             client.play()
