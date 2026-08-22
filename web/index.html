@@ -451,6 +451,32 @@
       color: var(--accent-cyan);
     }
 
+    .track-description-card {
+      margin-top: 10px;
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      background: linear-gradient(135deg, rgba(121, 40, 202, 0.15) 0%, rgba(0, 242, 254, 0.12) 100%);
+      border: 1px solid rgba(0, 242, 254, 0.35);
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+
+    .track-desc-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      color: var(--accent-cyan);
+      margin-bottom: 6px;
+      letter-spacing: 0.04em;
+    }
+
+    .track-desc-text {
+      font-size: 0.86rem;
+      line-height: 1.55;
+      color: #e2e8f0;
+    }
+
     /* Typing Indicator */
     .typing-indicator {
       display: none;
@@ -1369,6 +1395,18 @@
 
         actionCard.innerHTML = `<span class="track-action-icon">${actionIcon}</span><div class="track-action-info">${actionText}</div>`;
         bubble.appendChild(actionCard);
+      }
+
+      // Track Description Card (from music_meta.db)
+      if (msg.description) {
+        const descCard = document.createElement('div');
+        descCard.className = 'track-description-card';
+        const tTitle = msg.track_info && msg.track_info.title ? `『${escapeHtml(msg.track_info.title)}』` : '';
+        descCard.innerHTML = `
+          <div class="track-desc-header">📖 楽曲の背景・解説 ${tTitle}</div>
+          <div class="track-desc-text">${escapeHtml(msg.description)}</div>
+        `;
+        bubble.appendChild(descCard);
       }
 
       const sourceTag = document.createElement('div');

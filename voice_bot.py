@@ -106,7 +106,7 @@ def query_db_tracks(keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
         param = f"%{keyword}%"
         cur.execute(
             """
-            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires
+            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
             FROM tracks
             WHERE genre LIKE ? OR mood LIKE ? OR title LIKE ? OR artist LIKE ? OR description LIKE ?
             ORDER BY RANDOM()
@@ -120,6 +120,75 @@ def query_db_tracks(keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
     except Exception as e:
         print(f"⚠️ DB検索エラー: {e}")
         return []
+
+
+def find_track_metadata(
+    file_path: Optional[str] = None,
+    title: Optional[str] = None,
+    artist: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """music_meta.db からファイルパスやタイトル・アーティスト名で楽曲情報・解説文を取得"""
+    if not os.path.exists(DB_PATH):
+        return None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        # 1. ファイル名/相対パスで完全一致または部分一致検索
+        if file_path:
+            norm_path = file_path.replace("\\", "/")
+            fname = norm_path.split("/")[-1]
+            cur.execute(
+                """
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                FROM tracks
+                WHERE relative_path = ? OR file_path LIKE ? OR relative_path LIKE ?
+                LIMIT 1;
+            """,
+                (norm_path, f"%{fname}", f"%{fname}"),
+            )
+            row = cur.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+
+        # 2. タイトルとアーティストで検索
+        if title and artist and artist != "アーティスト未設定":
+            cur.execute(
+                """
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                FROM tracks
+                WHERE title LIKE ? AND artist LIKE ?
+                LIMIT 1;
+            """,
+                (f"%{title}%", f"%{artist}%"),
+            )
+            row = cur.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+
+        # 3. タイトルのみで検索
+        if title and title != "未選択":
+            cur.execute(
+                """
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                FROM tracks
+                WHERE title LIKE ?
+                LIMIT 1;
+            """,
+                (f"%{title}%",),
+            )
+            row = cur.fetchone()
+            if row:
+                conn.close()
+                return dict(row)
+
+        conn.close()
+    except Exception as e:
+        print(f"⚠️ DB詳細取得エラー: {e}")
+    return None
 
 
 # ==================== MPD (moOde) 制御 ====================
@@ -164,15 +233,25 @@ def get_moode_status() -> Dict[str, Any]:
                 sample_rate = parts[0]
                 bit_depth = parts[1]
 
+        song_file = song.get("file", "")
+        song_title = song.get("title") or (song_file.split("/")[-1] if song_file else "未選択")
+        song_artist = song.get("artist") or "アーティスト未設定"
+        song_album = song.get("album") or "moOde Audio Library"
+
+        # DBから詳細・解説文 (description) を補完
+        db_meta = find_track_metadata(file_path=song_file, title=song_title, artist=song_artist)
+        description = db_meta.get("description", "") if db_meta else ""
+
         song_info = {
-            "title": song.get("title") or (song.get("file", "").split("/")[-1] if song.get("file") else "未選択"),
-            "artist": song.get("artist") or "アーティスト未設定",
-            "album": song.get("album") or "moOde Audio Library",
-            "file": song.get("file", ""),
+            "title": song_title,
+            "artist": song_artist,
+            "album": song_album,
+            "file": song_file,
             "id": song.get("id", ""),
             "sample_rate": sample_rate,
             "bit_depth": bit_depth,
-            "is_hires": (int(sample_rate) > 48000 or int(bit_depth) > 16) if sample_rate.isdigit() and bit_depth.isdigit() else False,
+            "is_hires": (int(sample_rate) > 48000 or int(bit_depth) > 16) if sample_rate.isdigit() and bit_depth.isdigit() else (db_meta.get("is_hires", 0) == 1 if db_meta else False),
+            "description": description,
         }
 
         return {
@@ -196,10 +275,17 @@ def get_moode_status() -> Dict[str, Any]:
 
 
 def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
-    """MPD 経由で moOde audio を操作し、結果詳細を返す"""
+    """MPD 経由で moOde audio を操作し、結果詳細および1曲目の解説文を返す"""
     action = command.get("action")
     query = command.get("query", "").strip()
-    result = {"success": False, "action": action, "tracks_added": [], "message": ""}
+    result = {
+        "success": False,
+        "action": action,
+        "tracks_added": [],
+        "track_info": None,
+        "description": "",
+        "message": "",
+    }
 
     if action == "unknown" or not action:
         print("🎵 [moOde] 音楽操作はありません。", flush=True)
@@ -223,11 +309,15 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 for track in db_tracks:
                     rel = track.get("relative_path")
                     if rel:
-                        search_results.append({"file": rel, "title": track.get("title"), "artist": track.get("artist")})
+                        search_results.append({
+                            "file": rel,
+                            "title": track.get("title"),
+                            "artist": track.get("artist"),
+                            "description": track.get("description", ""),
+                        })
 
-            # 2. DBで見つからない、またはDBパスをMPDで直接検索する場合
+            # 2. DBで見つからない、またはMPDで直接検索する場合
             if not search_results:
-                # 英語表記のジャンル変換 (例: ジャズ -> Jazz, ロック -> Rock)
                 genre_map = {
                     "ジャズ": "Jazz", "jazz": "Jazz", "JAZZ": "Jazz",
                     "ロック": "Rock", "rock": "Rock",
@@ -244,10 +334,17 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                     mpd_res = client.search("any", query)
                 if mpd_res:
                     for s in mpd_res[:10]:
+                        s_file = s.get("file", "")
+                        s_title = s.get("title", s_file.split("/")[-1])
+                        s_artist = s.get("artist", "")
+                        # DBから解説文を取得
+                        db_meta = find_track_metadata(file_path=s_file, title=s_title, artist=s_artist)
+                        s_desc = db_meta.get("description", "") if db_meta else ""
                         search_results.append({
-                            "file": s.get("file"),
-                            "title": s.get("title", s.get("file", "").split("/")[-1]),
-                            "artist": s.get("artist", "")
+                            "file": s_file,
+                            "title": s_title,
+                            "artist": s_artist,
+                            "description": s_desc,
                         })
 
             if search_results:
@@ -267,8 +364,20 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
 
                 client.play()
                 result["success"] = True
+
+                # 1曲目のメタデータとdescriptionをセット
+                first_track = search_results[0]
+                result["track_info"] = {
+                    "title": first_track.get("title"),
+                    "artist": first_track.get("artist"),
+                    "file": first_track.get("file"),
+                }
+                result["description"] = first_track.get("description", "")
+
                 result["message"] = f"「{query}」に該当する楽曲 ({added_count}曲) を再生開始しました。"
                 print(f"🎵 [moOde] '{query}' の再生を開始しました ({added_count}曲 追加)", flush=True)
+                if result["description"]:
+                    print(f"📖 [Description] {result['description']}", flush=True)
             else:
                 result["message"] = f"「{query}」に該当する曲がライブラリに見つかりませんでした。"
                 print(f"⚠️ [moOde] '{query}' に該当する曲が見つかりません", flush=True)
@@ -346,7 +455,6 @@ def speak(text: str):
                     output_wav.writeframes(source_wav.readframes(source_wav.getnframes()))
 
             if os.name != "nt":
-                # ALSAデバイスでの再生を試みる（失敗時はdefaultへフォールバック）
                 played = False
                 dev_candidates = [AUDIO_OUTPUT_DEV, "default", "sysdefault"]
                 for dev in dev_candidates:
@@ -358,7 +466,6 @@ def speak(text: str):
                     except Exception:
                         continue
                 if not played:
-                    # 最後の手段: 引数なし aplay
                     subprocess.run(["aplay", "-q", temp_wav], check=False)
             else:
                 try:
@@ -468,34 +575,56 @@ def process_user_message(
     source: str = "chat",
     speak_voice: bool = True,
 ) -> Dict[str, Any]:
-    """音声・Web Chat両方からのメッセージを処理するコア関数"""
+    """音声・Web Chat両方からのメッセージを処理するコア関数 (description読み上げ対応)"""
     print(f"\n📩 [Request] 処理開始 (from {source}): '{user_text}'", flush=True)
 
     # 1. LLMによる意図抽出
     cmd = parse_intent_with_llm(user_text)
 
-    # 2. moOde (MPD) 操作
+    # 2. moOde (MPD) 操作 & DB解説取得
     control_res = control_moode(cmd)
 
     reply_text = cmd.get("reply", "承知いたしました。")
+    description = control_res.get("description", "")
+    track_info = control_res.get("track_info") or {}
 
-    # 3. 音声読み上げ (VOICEVOX) - speak_voiceが有効な場合のみ
+    # 3. 再生時、DBに description が存在すれば返答・音声読み上げ文に組み込む
+    if cmd.get("action") == "play_search" and control_res.get("success"):
+        t_title = track_info.get("title")
+        t_artist = track_info.get("artist")
+
+        if description:
+            if t_title and t_artist and t_artist != "アーティスト未設定":
+                reply_text = f"『{t_title}』（{t_artist}）を再生します。{description}"
+            elif t_title:
+                reply_text = f"『{t_title}』を再生します。{description}"
+            else:
+                reply_text = f"音楽を再生します。{description}"
+        else:
+            if t_title and t_artist and t_artist != "アーティスト未設定":
+                reply_text = f"『{t_title}』（{t_artist}）を再生します。"
+            elif t_title:
+                reply_text = f"『{t_title}』を再生します。"
+
+    # 4. 音声読み上げ (VOICEVOX) - speak_voiceが有効な場合
     if speak_voice:
         threading.Thread(target=speak, args=(reply_text,), daemon=True).start()
 
-    # 4. 履歴に追加
+    # 5. 履歴に追加
     msg_record = {
         "sender": "assistant",
         "text": reply_text,
         "source": source,
         "action": cmd.get("action"),
         "query": cmd.get("query"),
+        "track_info": track_info,
+        "description": description,
         "tracks_added": control_res.get("tracks_added", []),
         "timestamp": time.strftime("%H:%M:%S"),
     }
     chat_history.append(msg_record)
 
-    # 5. 全 WebSocket クライアントにブロードキャスト
+    # 6. 全 WebSocket クライアントにブロードキャスト
     broadcast_event({
         "type": "chat_message",
         "message": msg_record,
@@ -508,6 +637,8 @@ def process_user_message(
         "action": cmd.get("action"),
         "query": cmd.get("query"),
         "reply": reply_text,
+        "description": description,
+        "track_info": track_info,
         "tracks_added": control_res.get("tracks_added", []),
         "control_success": control_res.get("success", False),
     }
@@ -573,7 +704,6 @@ def record_audio_stream() -> Optional[io.BytesIO]:
     if pyaudio is None:
         return None
 
-    # 発話中 (VOICEVOX/aplay再生中) はデバイス競合を避けるため待機
     while is_speaking_event.is_set():
         time.sleep(0.2)
 
@@ -730,7 +860,6 @@ def run_voice_loop():
             if user_text is None:
                 continue
 
-            # 呼びかけのみの場合は「はい、どうぞ」と返し、次の発話を聞く
             if not user_text:
                 speak("はい、どうぞ。")
                 cmd_audio = record_audio_stream()
@@ -741,7 +870,6 @@ def run_voice_loop():
             print(f"👤 [Voice Input] ユーザー発言: {user_text}", flush=True)
             voice_state["last_text"] = user_text
 
-            # Web UIにもユーザー発言をプッシュ
             broadcast_event({
                 "type": "chat_message",
                 "message": {
@@ -752,7 +880,6 @@ def run_voice_loop():
                 },
             })
 
-            # リクエスト共通処理
             process_user_message(user_text, source="voice", speak_voice=True)
 
         except Exception as e:
@@ -837,7 +964,6 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_websockets.append(websocket)
     try:
-        # 接続直後に現在ステータスを送信
         await websocket.send_text(
             json.dumps(
                 {
