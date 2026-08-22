@@ -110,50 +110,53 @@ def find_track_metadata(
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
-        # 1. ファイル名で検索
+        # 1. ファイル名で検索（完全一致、末尾一致、拡張子なし一致）
         if file_path:
             norm_path = file_path.replace("\\", "/")
             fname = norm_path.split("/")[-1]
+            fname_stem = os.path.splitext(fname)[0]
+
             cur.execute(
                 """
                 SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
                 FROM tracks
-                WHERE file_path LIKE ? OR relative_path LIKE ? OR relative_path = ?
+                WHERE file_path LIKE ? OR relative_path LIKE ? OR relative_path = ? OR file_path LIKE ? OR relative_path LIKE ?
                 LIMIT 1;
             """,
-                (f"%{fname}", f"%{fname}", norm_path),
+                (f"%{fname}", f"%{fname}", norm_path, f"%{fname_stem}%", f"%{fname_stem}%"),
             )
             row = cur.fetchone()
-            if row:
+            if row and row["description"]:
                 conn.close()
                 return dict(row)
 
         # 2. タイトルとアーティストで検索
-        if title and artist and artist != "アーティスト未設定":
+        if title and artist and artist != "アーティスト未設定" and artist != "Unknown":
             cur.execute(
                 """
                 SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
                 FROM tracks
-                WHERE title LIKE ? AND artist LIKE ?
+                WHERE (title LIKE ? OR ? LIKE '%' || title || '%') AND (artist LIKE ? OR ? LIKE '%' || artist || '%')
                 LIMIT 1;
             """,
-                (f"%{title}%", f"%{artist}%"),
+                (f"%{title}%", title, f"%{artist}%", artist),
             )
             row = cur.fetchone()
-            if row:
+            if row and row["description"]:
                 conn.close()
                 return dict(row)
 
         # 3. タイトルのみで検索
-        if title and title != "未選択":
+        if title and title != "未選択" and title != "Unknown":
             cur.execute(
                 """
                 SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
                 FROM tracks
-                WHERE title LIKE ?
+                WHERE title LIKE ? OR ? LIKE '%' || title || '%'
+                ORDER BY CASE WHEN title = ? THEN 0 ELSE 1 END
                 LIMIT 1;
             """,
-                (f"%{title}%",),
+                (f"%{title}%", title, title),
             )
             row = cur.fetchone()
             if row:
@@ -328,8 +331,8 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                         print(f"⚠️ [moOde] client.add('{song_file}') エラー: {add_err}")
 
                 if added_count > 0:
-                    client.play()
                     result["success"] = True
+                    result["needs_playback"] = True
 
                     # 1曲目のメタデータと DB からの description 取得
                     first_song = search_results[0]
@@ -347,10 +350,12 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                         "file": first_file,
                     }
                     result["description"] = description
-                    result["message"] = f"「{query}」に該当する楽曲 ({added_count}曲) を再生開始しました。"
-                    print(f"🎵 [moOde] '{query}' の再生を開始しました ({added_count}曲 追加)", flush=True)
+                    result["message"] = f"「{query}」に該当する楽曲 ({added_count}曲) をセットしました。"
+                    print(f"🎵 [moOde] '{query}' の楽曲をセットしました ({added_count}曲 追加)", flush=True)
                     if description:
-                        print(f"📖 [Description] {description}", flush=True)
+                        print(f"📖 [Description 取得成功] {description}", flush=True)
+                    else:
+                        print(f"ℹ️ [Description] DB内に解説文が見つかりませんでした (file='{first_file}', title='{first_title}', artist='{first_artist}')", flush=True)
                 else:
                     result["message"] = "楽曲の追加に失敗しました。"
                     print("⚠️ [moOde] 楽曲を追加できませんでした。", flush=True)
@@ -620,9 +625,33 @@ def process_user_message(
             elif t_title:
                 reply_text = f"『{t_title}』を再生します。"
 
-    # 4. 音声読み上げ (VOICEVOX) - speak_voiceが有効な場合
+    # 4. 音声読み上げ (VOICEVOX) と moOde 音楽再生の順序制御（解説文を話し終えてから再生）
+    needs_playback = control_res.get("needs_playback", False)
+
+    def trigger_playback_start():
+        """発話完了後に moOde の音楽再生を開始"""
+        client = get_mpd_client()
+        if client:
+            try:
+                client.play()
+                client.close()
+                client.disconnect()
+                print("▶️ [moOde] 音声案内（解説文）完了後に音楽再生を開始しました。", flush=True)
+                broadcast_status()
+            except Exception as e:
+                print(f"⚠️ [moOde] 再生開始エラー: {e}")
+
     if speak_voice:
-        threading.Thread(target=speak, args=(reply_text,), daemon=True).start()
+        def speak_and_play_flow():
+            speak(reply_text)
+            if needs_playback:
+                trigger_playback_start()
+
+        threading.Thread(target=speak_and_play_flow, daemon=True).start()
+    else:
+        # 音声読み上げなしの場合は即座に再生
+        if needs_playback:
+            trigger_playback_start()
 
     # 5. 履歴に追加
     msg_record = {
