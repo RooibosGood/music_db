@@ -3,6 +3,7 @@ import asyncio
 import io
 import json
 import os
+import random
 import re
 import sqlite3
 import struct
@@ -74,6 +75,8 @@ is_speaking_event = threading.Event()
 stt_model = None
 chat_history: List[Dict[str, Any]] = []
 active_websockets: List[WebSocket] = []
+last_announced_file: Optional[str] = None  # 二重曲紹介防止用
+recent_played_track_ids: List[int] = []  # ランダム選曲の重複防止用
 voice_state = {
     "is_listening": False,
     "state": "idle",
@@ -171,7 +174,8 @@ def find_track_metadata(
 
 # ==================== SQLite DB 楽曲検索 & 選曲 ====================
 def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
-    """music_meta.db からユーザー要望（ジャンル、ムード、エネルギー、ハイレゾ、アーティスト、曲名等）に合致する楽曲を抽出"""
+    """music_meta.db からユーザー要望（ジャンル、ムード、エネルギー、ハイレゾ、アーティスト、曲名等）に合致する楽曲を完全ランダム抽出"""
+    global recent_played_track_ids
     if not os.path.exists(DB_PATH):
         print(f"⚠️ [DB] {DB_PATH} が存在しません。")
         return []
@@ -183,6 +187,9 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         clean_q = query.strip()
         conditions = []
         params = []
+
+        # 直近に再生した楽曲IDは除外候補（同じ曲の連続再生を防止）
+        recent_ids = recent_played_track_ids[-30:] if recent_played_track_ids else []
 
         # 1. ジャンル判定マッピング
         genre_keywords = {
@@ -235,43 +242,60 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
             if kw_conditions:
                 conditions.append(" AND ".join(kw_conditions))
 
-        where_sql = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        # description がある曲を最優先し、ランダム順で抽出
+        # 直近再生した曲を除外する条件を追加（ヒット数が十分に取れる場合）
+        base_where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        
+        # まず直近再生除外 ＋ description ありの候補をランダムに50件取得
         sql = f"""
             SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
             FROM tracks
-            {where_sql}
+            {base_where}
             ORDER BY (CASE WHEN description IS NOT NULL AND description != '' THEN 0 ELSE 1 END), RANDOM()
-            LIMIT {limit};
+            LIMIT 50;
         """
         cur.execute(sql, params)
-        rows = cur.fetchall()
+        rows = [dict(r) for r in cur.fetchall()]
+
+        # 直近再生曲を除外したリストを作成
+        filtered_rows = [r for r in rows if r["id"] not in recent_ids]
+        candidate_rows = filtered_rows if len(filtered_rows) >= limit else rows
 
         # ヒットしなかった場合、キーワードの部分一致でフォールバック
-        if not rows and keyword_q:
+        if not candidate_rows and keyword_q:
             cur.execute(f"""
                 SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
                 FROM tracks
                 WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description LIKE ?
                 ORDER BY (CASE WHEN description IS NOT NULL AND description != '' THEN 0 ELSE 1 END), RANDOM()
-                LIMIT {limit};
+                LIMIT 50;
             """, (f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%"))
-            rows = cur.fetchall()
+            candidate_rows = [dict(r) for r in cur.fetchall()]
 
         # それでもヒットしない場合、ランダムに曲を取得
-        if not rows:
-            cur.execute(f"""
+        if not candidate_rows:
+            cur.execute("""
                 SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
                 FROM tracks
                 WHERE description IS NOT NULL AND description != ''
                 ORDER BY RANDOM()
-                LIMIT {limit};
+                LIMIT 50;
             """)
-            rows = cur.fetchall()
+            candidate_rows = [dict(r) for r in cur.fetchall()]
+
+        # Python 側でも再度シャッフルして完全なランダム性を確保
+        random.shuffle(candidate_rows)
+        selected_tracks = candidate_rows[:limit]
+
+        # 選択した曲の ID を直近再生リストに追加（最大50件保持）
+        for t in selected_tracks:
+            t_id = t.get("id")
+            if t_id and t_id not in recent_played_track_ids:
+                recent_played_track_ids.append(t_id)
+        if len(recent_played_track_ids) > 50:
+            recent_played_track_ids = recent_played_track_ids[-50:]
 
         conn.close()
-        return [dict(r) for r in rows]
+        return selected_tracks
     except Exception as e:
         print(f"⚠️ [DB検索エラー]: {e}")
         return []
@@ -432,6 +456,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
         result["message"] = f"moOde ({MOODE_IP}) に接続できませんでした。"
         return result
 
+    global last_announced_file
     try:
         if action == "play_search":
             client.clear()
@@ -448,13 +473,17 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 first_track = added_tracks[0] if added_tracks else db_tracks[0]
                 first_title = first_track.get("title", "未設定")
                 first_artist = first_track.get("artist", "アーティスト未設定")
+                first_file = first_track.get("relative_path", "")
                 description = first_track.get("description", "")
+
+                # 1曲目の二重曲紹介を防止するため記録
+                last_announced_file = first_file
 
                 result["tracks_added"] = [t.get("title", "") for t in added_tracks]
                 result["track_info"] = {
                     "title": first_title,
                     "artist": first_artist,
-                    "file": first_track.get("relative_path", ""),
+                    "file": first_file,
                 }
                 result["description"] = description
                 result["success"] = True
@@ -482,14 +511,36 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             client.stop()
             result["success"] = True
             result["message"] = "音楽を停止しました。"
-        elif action == "next":
-            client.next()
+        elif action in ("next", "previous"):
+            if action == "next":
+                client.next()
+                result["message"] = "次の曲にスキップしました。"
+            else:
+                client.previous()
+                result["message"] = "前の曲に戻りました。"
+
+            time.sleep(0.3)
+            new_song = client.currentsong()
+            new_file = new_song.get("file", "")
+            last_announced_file = new_file
+
+            # 解説文読み上げのために一旦一時停止
+            client.pause(1)
             result["success"] = True
-            result["message"] = "次の曲にスキップしました。"
-        elif action == "previous":
-            client.previous()
-            result["success"] = True
-            result["message"] = "前の曲に戻りました。"
+            result["needs_playback"] = True
+
+            new_title = new_song.get("title") or (new_file.split("/")[-1] if new_file else "次の曲")
+            new_artist = new_song.get("artist") or "アーティスト未設定"
+            db_meta = find_track_metadata(file_path=new_file, title=new_title, artist=new_artist)
+            description = db_meta.get("description", "") if db_meta else ""
+
+            result["track_info"] = {
+                "title": new_title,
+                "artist": new_artist,
+                "file": new_file,
+            }
+            result["description"] = description
+
         elif action == "volume":
             vol = command.get("value", 50)
             client.setvol(int(vol))
@@ -741,23 +792,24 @@ def process_user_message(
     description = control_res.get("description", "")
     track_info = control_res.get("track_info") or {}
 
-    # 3. 再生時、DBに description が存在すれば返答・音声読み上げ文に組み込む
-    if cmd.get("action") == "play_search" and control_res.get("success"):
+    # 3. 再生・スキップ時、DBに description が存在すれば返答・音声読み上げ文に組み込む
+    if cmd.get("action") in ("play_search", "next", "previous") and control_res.get("success"):
         t_title = track_info.get("title") or "楽曲"
         t_artist = track_info.get("artist")
 
         clean_desc = clean_text_for_speech(description, max_chars=100)
+        prefix = "次の曲、" if cmd.get("action") == "next" else ("前の曲、" if cmd.get("action") == "previous" else "")
 
         if clean_desc:
             if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                reply_text = f"『{t_title}』（{t_artist}）を再生します。{clean_desc}"
+                reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。{clean_desc}"
             else:
-                reply_text = f"『{t_title}』を再生します。{clean_desc}"
+                reply_text = f"{prefix}『{t_title}』を再生します。{clean_desc}"
         else:
             if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                reply_text = f"『{t_title}』（{t_artist}）を再生します。"
+                reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。"
             else:
-                reply_text = f"『{t_title}』を再生します。"
+                reply_text = f"{prefix}『{t_title}』を再生します。"
 
         print(f"📖 [音声案内テキスト] {reply_text}", flush=True)
 
@@ -1003,6 +1055,103 @@ def command_after_wake_word(text: str) -> Optional[str]:
     return None
 
 
+# ==================== 自動トラック監視 & 曲紹介ループ ====================
+def run_track_watcher_loop():
+    """moOde の再生進行を監視し、2曲目以降のトラック切り替わり時に自動で曲紹介を読み上げるスレッド"""
+    global last_announced_file
+    time.sleep(3.0)  # 起動初期化待ち
+    print("🎧 [Watcher] トラック変更監視ループを開始しました。(2曲目以降の自動解説)", flush=True)
+
+    while True:
+        time.sleep(1.0)
+        try:
+            # システム発話中（TTS再生中）は監視スキップ
+            if is_speaking_event.is_set():
+                continue
+
+            status_data = get_moode_status()
+            if not status_data.get("connected"):
+                continue
+
+            play_state = status_data.get("state")
+            song = status_data.get("song") or {}
+            cur_file = song.get("file")
+
+            if not cur_file or play_state != "play":
+                continue
+
+            # 初回起動直後など、まだ何も記録されていない場合は記録のみ
+            if last_announced_file is None:
+                last_announced_file = cur_file
+                continue
+
+            # トラックが切り替わったことを検出！
+            if cur_file != last_announced_file:
+                print(f"\n🔄 [Watcher] トラック切り替わり検知: {cur_file}", flush=True)
+                last_announced_file = cur_file
+
+                # 1. 音楽を一旦一時停止して、曲紹介を発話
+                mpd_client = get_mpd_client()
+                if mpd_client:
+                    try:
+                        mpd_client.pause(1)
+                        mpd_client.close()
+                        mpd_client.disconnect()
+                    except Exception:
+                        pass
+
+                # 2. 曲情報と解説文を取得
+                t_title = song.get("title") or "楽曲"
+                t_artist = song.get("artist")
+                db_meta = find_track_metadata(file_path=cur_file, title=t_title, artist=t_artist)
+                description = db_meta.get("description", "") if db_meta else ""
+                clean_desc = clean_text_for_speech(description, max_chars=100)
+
+                if clean_desc:
+                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                        announce_text = f"続いては、『{t_title}』、{t_artist}です。{clean_desc}"
+                    else:
+                        announce_text = f"続いては、『{t_title}』です。{clean_desc}"
+                else:
+                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                        announce_text = f"続いては、『{t_title}』、{t_artist}をお送りします。"
+                    else:
+                        announce_text = f"続いては、『{t_title}』をお送りします。"
+
+                print(f"📖 [Watcher 自動曲紹介] {announce_text}", flush=True)
+
+                # チャット履歴・Web UI にもプッシュ
+                msg_record = {
+                    "sender": "assistant",
+                    "text": announce_text,
+                    "source": "auto_announcer",
+                    "action": "track_transition",
+                    "track_info": song,
+                    "description": description,
+                    "timestamp": time.strftime("%H:%M:%S"),
+                }
+                chat_history.append(msg_record)
+                broadcast_event({"type": "chat_message", "message": msg_record})
+
+                # 3. 発話を実行（排他ロックで安全に発話）
+                speak(announce_text)
+
+                # 4. 発話完了後に音楽再生を再開
+                mpd_client = get_mpd_client()
+                if mpd_client:
+                    try:
+                        mpd_client.play()
+                        mpd_client.close()
+                        mpd_client.disconnect()
+                        print("▶️ [moOde] 2曲目の曲紹介完了後に音楽再生を再開しました。", flush=True)
+                        broadcast_status()
+                    except Exception as e:
+                        print(f"⚠️ [moOde] 再生再開エラー: {e}")
+
+        except Exception as e:
+            time.sleep(2.0)
+
+
 def run_voice_loop():
     """音声待機・認識バックグラウンドスレッド"""
     try:
@@ -1196,6 +1345,10 @@ def main():
     print(f" 🌐 Web UI   : http://{args.host}:{args.port} (ブラウザでアクセス)")
     print(f" 🎙️ 音声入力 : {'無効 (--no-voice)' if args.no_voice else '有効 (ヘイ、マスター)'}")
     print("=" * 60)
+
+    # 自動トラック変更監視スレッド起動（2曲目以降の自動曲紹介）
+    watcher_thread = threading.Thread(target=run_track_watcher_loop, daemon=True)
+    watcher_thread.start()
 
     # 音声リスナースレッド起動
     if not args.no_voice:
