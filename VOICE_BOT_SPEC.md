@@ -225,14 +225,20 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 
 ---
 
-### 4.5 音声合成・出力モジュール (`speak`)
+### 4.5 音声合成・出力モジュール (`speak`, `convert_english_to_katakana`)
 
 VOICEVOX HTTP API を呼び出して音声を生成し、ALSA デバイスへ直接再生します。
 
-#### 処理フロー
-1. `voice_lock` の取得および `is_speaking_event.set()` によるマイク集音の一時中断。
-2. **Audio Query 生成**: `POST http://localhost:50021/audio_query?text={encoded_text}&speaker=13`
-3. **音声合成 (WAVバイナリ)**: `POST http://localhost:50021/synthesis?speaker=13`
+#### 1. 英語・アルファベット発音のカタカナ化 (`convert_english_to_katakana`)
+VOICEVOX（Open JTalk辞書）が英単語をアルファベット順にスペル読み（「W-H-I-T-E」など）してしまうのを防止するため、発話前にテキストを自動変換します。
+- **高速辞書置換 (`ENGLISH_KATAKANA_DICT`)**: 有名アーティスト（Cream ➔ クリーム、Diana Krall ➔ ダイアナ・クラール等）や代表曲名・音楽単語を瞬時にカタカナ化。
+- **LLM 文脈カタカナ化 (Ollama)**: 辞書にない未知の英語曲名やアーティスト名に対しても、自然な発音のカタカナへ自動変換。
+
+#### 2. 処理フロー (`speak`)
+1. `convert_english_to_katakana()` による英語発音のカタカナ化。
+2. `voice_lock` の取得および `is_speaking_event.set()` によるマイク集音の一時中断。
+3. **Audio Query 生成**: `POST http://localhost:50021/audio_query?text={encoded_text}&speaker=13` (timeout: 30秒)
+4. **音声合成 (WAVバイナリ)**: `POST http://localhost:50021/synthesis?speaker=13` (timeout: 60秒)
 4. **無音パディング付加**: 生成された WAV の先頭に `0.3秒` 分の無音 PCM データを付加（オーディオインターフェースの立ち上がり遅延による「頭切れ」防止）。
 5. **ALSA aplay 再生**: `aplay -D plughw:0,0 -q temp.wav` を実行（エラー時は `default` でリトライ）。
 6. 一時ファイルの削除および `is_speaking_event.clear()` によるマイク集音再開。

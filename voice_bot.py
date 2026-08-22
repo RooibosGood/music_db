@@ -615,11 +615,148 @@ def clean_text_for_speech(text: str, max_chars: int = 120) -> str:
     return result or t[:max_chars]
 
 
+# 英語・音楽用語のカタカナ発音辞書
+ENGLISH_KATAKANA_DICT = {
+    # 代表的アーティスト・バンド名
+    "cream": "クリーム",
+    "the beatles": "ザ・ビートルズ",
+    "beatles": "ビートルズ",
+    "eric clapton": "エリック・クラプトン",
+    "clapton": "クラプトン",
+    "diana krall": "ダイアナ・クラール",
+    "bill evans": "ビル・エヴァンス",
+    "miles davis": "マイルス・デイヴィス",
+    "john coltrane": "ジョン・コルトレーン",
+    "norah jones": "ノラ・ジョーンズ",
+    "steely dan": "スティーリー・ダン",
+    "pink floyd": "ピンク・フロイド",
+    "led zeppelin": "レッド・ツェッペリン",
+    "queen": "クイーン",
+    "michael jackson": "マイケル・ジャクソン",
+    "the ritz": "ザ・リッツ",
+    "ritz": "リッツ",
+
+    # 代表曲名・キーワード
+    "white room": "ホワイト・ルーム",
+    "crossroads": "クロスロード",
+    "sunshine of your love": "サンシャイン・オブ・ユア・ラヴ",
+    "badge": "バッジ",
+    "spoonful": "スプーンフル",
+    "politician": "ポリティシャン",
+    "sitting on top of the world": "シッティング・オン・トップ・オブ・ザ・ワールド",
+    "born under a bad sign": "ボーン・アンダー・ア・バッド・サイン",
+    "passing the time": "パッシング・ザ・タイム",
+    "as you said": "アズ・ユー・セッド",
+    "pressed rat and warthog": "プレスド・ラット・アンド・ウォートホッグ",
+    "those were the days": "ゾーズ・ワー・ザ・デイズ",
+    "deserted cities of the heart": "デザート・シティーズ・オブ・ザ・ハート",
+    "fly me to the moon": "フライ・ミー・トゥ・ザ・ムーン",
+    "waltz for debby": "ワルツ・フォー・デビィ",
+    "autumn leaves": "枯葉",
+    "take five": "テイク・ファイブ",
+    "blue in green": "ブルー・イン・グリーン",
+    "meditation": "メディテーション",
+    "it could happen to you": "イット・クッド・ハプン・トゥ・ユー",
+    "take my breath away": "テイク・マイ・ブレス・アウェイ",
+    "mack the knife": "マック・ザ・ナイフ",
+
+    # 一般音楽用語
+    "live": "ライブ",
+    "take": "テイク",
+    "disc": "ディスク",
+    "disk": "ディスク",
+    "vol": "ボリューム",
+    "remaster": "リマスター",
+    "remastered": "リマスター",
+    "version": "バージョン",
+    "acoustic": "アコースティック",
+    "featuring": "フィーチャリング",
+    "feat": "フィーチャリング",
+    "track": "トラック",
+    "album": "アルバム",
+    "jazz": "ジャズ",
+    "rock": "ロック",
+    "pop": "ポップ",
+    "blues": "ブルース",
+    "classic": "クラシック",
+    "classical": "クラシック",
+    "best": "ベスト",
+    "greatest": "グレイテスト",
+    "hits": "ヒッツ",
+    "the": "ザ",
+    "love": "ラヴ",
+    "night": "ナイト",
+    "day": "デイ",
+    "time": "タイム",
+    "world": "ワールド",
+    "music": "ミュージック",
+}
+
+
+def convert_english_to_katakana(text: str) -> str:
+    """英単語・英語曲名・アーティスト名を VOICEVOX 用の自然なカタカナ読みに変換（アルファベット棒読み防止）"""
+    if not text or not re.search(r"[A-Za-z]{2,}", text):
+        return text
+
+    converted = text
+
+    # 1. 高速辞書置換（長いフレーズから順にマッチング）
+    sorted_dict = sorted(ENGLISH_KATAKANA_DICT.items(), key=lambda x: len(x[0]), reverse=True)
+    for en_word, kana_word in sorted_dict:
+        pattern = re.compile(rf"\b{re.escape(en_word)}\b", re.IGNORECASE)
+        converted = pattern.sub(kana_word, converted)
+
+    # アルファベットが残っていなければ終了
+    if not re.search(r"[A-Za-z]{2,}", converted):
+        return converted
+
+    # 2. Ollama (LLM) による文脈カタカナ化
+    try:
+        payload = {
+            "model": LLM_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "あなたは日本語音声合成用の発音変換アシスタントです。"
+                        "入力文に含まれる英単語やアルファベット（曲名、アーティスト名等）を、自然な日本語カタカナ読みに変換してください。"
+                        "文構造や前後の日本語はそのまま保ち、変換後のナレーション文のみを1行で出力してください。"
+                        "余計な解説や引用符、マークダウンは一切出力しないでください。"
+                    ),
+                },
+                {"role": "user", "content": converted},
+            ],
+            "stream": False,
+            "think": False,
+            "keep_alive": "10m",
+            "options": {
+                "num_ctx": 1024,
+                "temperature": 0,
+                "num_predict": 128,
+            },
+        }
+        res_json = http_post_json(OLLAMA_CHAT_URL, payload, timeout=4.0)
+        llm_reply = res_json.get("message", {}).get("content", "").strip()
+        llm_reply = re.sub(r"<think>[\s\S]*?</think>", "", llm_reply).strip()
+        llm_reply = llm_reply.replace("```", "").replace("\n", " ").strip()
+        if llm_reply and len(llm_reply) >= len(converted) * 0.5:
+            print(f"🔤 [Kana] 英語カタカナ変換: '{text}' ➔ '{llm_reply}'", flush=True)
+            return llm_reply
+    except Exception:
+        pass
+
+    return converted
+
+
 def speak(text: str):
-    """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力"""
+    """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力（英語のカタカナ化対応）"""
     global AUDIO_OUTPUT_DEV
     if not text:
         return
+
+    # アルファベットの棒読みを防止し、自然なカタカナ発音に変換
+    text = convert_english_to_katakana(text)
+
     with voice_lock:
         is_speaking_event.set()
         started_at = time.monotonic()
