@@ -1108,14 +1108,29 @@
     }
     drawVisualizer();
 
-    // WebSocket Connection
+    // WebSocket Connection & HTTP Polling Fallback
+    let wsFailCount = 0;
     function initWebSocket() {
+      if (wsFailCount >= 3) {
+        wsDot.className = 'status-dot online';
+        wsStatusText.textContent = 'HTTP: 稼働中';
+        return;
+      }
+
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const wsUrl = `${protocol}//${window.location.host}/ws`;
 
-      ws = new WebSocket(wsUrl);
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (e) {
+        wsFailCount++;
+        wsDot.className = 'status-dot online';
+        wsStatusText.textContent = 'HTTP: 稼働中';
+        return;
+      }
 
       ws.onopen = () => {
+        wsFailCount = 0;
         wsDot.className = 'status-dot online';
         wsStatusText.textContent = 'WS: 接続中';
         showToast('🟢 サーバーと接続しました');
@@ -1131,14 +1146,20 @@
       };
 
       ws.onclose = () => {
-        wsDot.className = 'status-dot offline';
-        wsStatusText.textContent = 'WS: 切断';
-        setTimeout(initWebSocket, reconnectInterval);
+        wsFailCount++;
+        if (wsFailCount < 3) {
+          wsDot.className = 'status-dot active';
+          wsStatusText.textContent = 'WS: 再接続中';
+          setTimeout(initWebSocket, reconnectInterval);
+        } else {
+          wsDot.className = 'status-dot online';
+          wsStatusText.textContent = 'HTTP: 稼働中';
+        }
       };
 
       ws.onerror = (err) => {
-        console.error('WS Error:', err);
-        ws.close();
+        wsFailCount++;
+        try { ws.close(); } catch(e){}
       };
     }
 

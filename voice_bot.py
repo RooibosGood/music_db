@@ -68,6 +68,7 @@ RECORD_SECONDS = 4
 
 # グローバル状態管理
 voice_lock = threading.Lock()
+is_speaking_event = threading.Event()
 stt_model = None
 chat_history: List[Dict[str, Any]] = []
 active_websockets: List[WebSocket] = []
@@ -91,17 +92,6 @@ def http_post_json(url: str, data: Dict[str, Any], timeout: float = 30.0) -> Dic
     with urllib.request.urlopen(req, timeout=timeout) as response:
         resp_data = response.read().decode("utf-8")
         return json.loads(resp_data)
-
-
-def http_post_raw(url: str, data_bytes: bytes, content_type: str = "application/json", timeout: float = 30.0) -> bytes:
-    """バイナリまたは文字列をPOSTしてレスポンスバイナリを返す"""
-    req = urllib.request.Request(
-        url,
-        data=data_bytes,
-        headers={"Content-Type": content_type, "User-Agent": "moOde-AI-Master/1.0"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return response.read()
 
 
 # ==================== SQLite DB ヘルパー ====================
@@ -218,7 +208,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
 
     client = get_mpd_client()
     if client is None:
-        print(f"❌ [moOde] {MOODE_IP}:{MOODE_PORT} に接続できませんでした。(シミュレーション/未接続)", flush=True)
+        print(f"❌ [moOde] {MOODE_IP}:{MOODE_PORT} に接続できませんでした。", flush=True)
         result["message"] = f"moOde ({MOODE_IP}) に接続できませんでした。"
         return result
 
@@ -237,7 +227,19 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
 
             # 2. DBで見つからない、またはDBパスをMPDで直接検索する場合
             if not search_results:
-                mpd_res = client.search("genre", query)
+                # 英語表記のジャンル変換 (例: ジャズ -> Jazz, ロック -> Rock)
+                genre_map = {
+                    "ジャズ": "Jazz", "jazz": "Jazz", "JAZZ": "Jazz",
+                    "ロック": "Rock", "rock": "Rock",
+                    "ポップ": "Pop", "ポップス": "Pop",
+                    "クラシック": "Classical",
+                    "ブルース": "Blues",
+                }
+                genre_query = genre_map.get(query, query)
+
+                mpd_res = client.search("genre", genre_query)
+                if not mpd_res and genre_query != query:
+                    mpd_res = client.search("genre", query)
                 if not mpd_res:
                     mpd_res = client.search("any", query)
                 if mpd_res:
@@ -308,17 +310,18 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
 
 # ==================== 音声合成 & 出力 (VOICEVOX) ====================
 def speak(text: str):
-    """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力"""
+    """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力 (ALSA排他制御付き)"""
     if not text:
         return
     with voice_lock:
+        is_speaking_event.set()
         started_at = time.monotonic()
         print(f"🔊 [VOICEVOX] 読み上げ開始: {text}", flush=True)
         try:
             # 1. audio_query
             query_url = f"{VOICEVOX_URL}/audio_query?text={urllib.parse.quote(text)}&speaker={SPEAKER_ID}"
             req_q = urllib.request.Request(query_url, method="POST")
-            with urllib.request.urlopen(req_q, timeout=15) as res_q:
+            with urllib.request.urlopen(req_q, timeout=10) as res_q:
                 query_data = res_q.read()
 
             # 2. synthesis
@@ -329,7 +332,7 @@ def speak(text: str):
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req_s, timeout=25) as res_s:
+            with urllib.request.urlopen(req_s, timeout=20) as res_s:
                 wav_bytes = res_s.read()
 
             temp_wav = "/tmp/voice_reply.wav" if os.name != "nt" else os.path.join(os.environ.get("TEMP", "."), "voice_reply.wav")
@@ -343,7 +346,20 @@ def speak(text: str):
                     output_wav.writeframes(source_wav.readframes(source_wav.getnframes()))
 
             if os.name != "nt":
-                subprocess.run(["aplay", "-D", AUDIO_OUTPUT_DEV, "-q", temp_wav], check=True)
+                # ALSAデバイスでの再生を試みる（失敗時はdefaultへフォールバック）
+                played = False
+                dev_candidates = [AUDIO_OUTPUT_DEV, "default", "sysdefault"]
+                for dev in dev_candidates:
+                    try:
+                        res = subprocess.run(["aplay", "-D", dev, "-q", temp_wav], capture_output=True, timeout=15)
+                        if res.returncode == 0:
+                            played = True
+                            break
+                    except Exception:
+                        continue
+                if not played:
+                    # 最後の手段: 引数なし aplay
+                    subprocess.run(["aplay", "-q", temp_wav], check=False)
             else:
                 try:
                     import winsound
@@ -356,7 +372,9 @@ def speak(text: str):
 
             print(f"🔊 [VOICEVOX] 音声出力完了（{time.monotonic() - started_at:.1f}秒）", flush=True)
         except Exception as e:
-            print(f"⚠️ [VOICEVOX] 発話エラー (スキップ): {e}")
+            print(f"⚠️ [VOICEVOX] 発話スキップ: {e}")
+        finally:
+            is_speaking_event.clear()
 
 
 # ==================== LLM 意図解析 (Ollama) ====================
@@ -461,7 +479,7 @@ def process_user_message(
 
     reply_text = cmd.get("reply", "承知いたしました。")
 
-    # 3. 音声読み上げ (VOICEVOX)
+    # 3. 音声読み上げ (VOICEVOX) - speak_voiceが有効な場合のみ
     if speak_voice:
         threading.Thread(target=speak, args=(reply_text,), daemon=True).start()
 
@@ -498,6 +516,8 @@ def process_user_message(
 # ==================== WebSocket リアルタイム配信 ====================
 def broadcast_event(data: Dict[str, Any]):
     """接続中の全WebSocketにイベントを非同期送信"""
+    if not active_websockets:
+        return
     loop = None
     try:
         loop = asyncio.get_event_loop()
@@ -549,9 +569,14 @@ def init_whisper():
 
 
 def record_audio_stream() -> Optional[io.BytesIO]:
-    """マイクから音声を録音"""
+    """マイクから音声を録音 (発話中は待機)"""
     if pyaudio is None:
         return None
+
+    # 発話中 (VOICEVOX/aplay再生中) はデバイス競合を避けるため待機
+    while is_speaking_event.is_set():
+        time.sleep(0.2)
+
     p = pyaudio.PyAudio()
 
     input_device = None
@@ -596,6 +621,8 @@ def record_audio_stream() -> Optional[io.BytesIO]:
 
     frames = []
     for _ in range(0, int(RATE / CHUNK * RECORD_SECONDS)):
+        if is_speaking_event.is_set():
+            break
         try:
             data = stream.read(CHUNK, exception_on_overflow=False)
             frames.append(data)
@@ -603,9 +630,15 @@ def record_audio_stream() -> Optional[io.BytesIO]:
             break
 
     sample_width = p.get_sample_size(FORMAT)
-    stream.stop_stream()
-    stream.close()
+    try:
+        stream.stop_stream()
+        stream.close()
+    except Exception:
+        pass
     p.terminate()
+
+    if not frames:
+        return None
 
     wav_io = io.BytesIO()
     wf = wave.open(wav_io, "wb")
@@ -682,7 +715,7 @@ def run_voice_loop():
 
             audio_data = record_audio_stream()
             if not audio_data:
-                time.sleep(1.0)
+                time.sleep(0.5)
                 continue
 
             voice_state["is_listening"] = True
