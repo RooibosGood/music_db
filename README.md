@@ -182,19 +182,22 @@ Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と 
 ### 📦 必要パッケージのインストール
 
 ```bash
-pip install fastapi uvicorn websockets python-mpd2 faster-whisper pyaudio pydantic
+pip install fastapi uvicorn websockets python-mpd2 faster-whisper pyaudio pydantic edge-tts
 ```
 
 ### 🚀 起動方法
 
 ```bash
-# 1. 音声リスナー ＋ Webサーバー を同時起動 (デフォルト: ポート 8000)
-python voice_bot.py
+# 1. 英語DJモードで起動 (デフォルト: --lang en, カード0出力)
+python voice_bot.py --audio-dev plughw:0,0
 
-# 2. ポートや moOde の IP を指定して起動
+# 2. 日本語モードで起動
+python voice_bot.py --audio-dev plughw:0,0 --lang ja
+
+# 3. ポートや moOde の IP を指定して起動
 python voice_bot.py --moode-ip 192.168.68.198 --port 8000
 
-# 3. マイクなし環境 / Web Chat のみで起動
+# 4. マイクなし環境 / Web Chat のみで起動
 python voice_bot.py --no-voice
 ```
 

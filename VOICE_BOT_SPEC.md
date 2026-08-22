@@ -225,23 +225,25 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 
 ---
 
-### 4.5 音声合成・出力モジュール (`speak`, `convert_english_to_katakana`)
+### 4.5 音声合成・出力モジュール (`speak_english`, `speak`, `build_english_track_announcement`)
 
-VOICEVOX HTTP API を呼び出して音声を生成し、ALSA デバイスへ直接再生します。
+曲紹介アナウンスは **英語DJモード (`--lang en`, デフォルト)** および **日本語モード (`--lang ja`)** に対応しています。
 
-#### 1. 英語・アルファベット発音のカタカナ化 (`convert_english_to_katakana`)
-VOICEVOX（Open JTalk辞書）が英単語をアルファベット順にスペル読み（「W-H-I-T-E」など）してしまうのを防止するため、発話前にテキストを自動変換します。
-- **高速辞書置換 (`ENGLISH_KATAKANA_DICT`)**: 有名アーティスト（Cream ➔ クリーム、Diana Krall ➔ ダイアナ・クラール等）や代表曲名・音楽単語を瞬時にカタカナ化。
-- **LLM 文脈カタカナ化 (Ollama)**: 辞書にない未知の英語曲名やアーティスト名に対しても、自然な発音のカタカナへ自動変換。
+#### 1. 英語DJモード (`build_english_track_announcement`, `speak_english`)
+- **英語DJナレーション生成 (`build_english_track_announcement`)**:
+  - タイトル、アーティスト、ジャンル、ムード、DB解説文（`description`）をもとに、洗練された英語FMラジオDJスタイルのアナウンス文を生成（Ollama `qwen3.5:2b` による1文要約またはテンプレート補完）。
+  - 例: `"Now playing: 'White Room' by Cream. Enjoy this Rock track."`
+  - 例: `"Next up is 'Fly Me To The Moon' by Diana Krall. Enjoy this Jazz track."`
+- **英語音声合成 (`speak_english`)**:
+  - **edge-tts (最優先)**: `en-US-ChristopherNeural` などの超高音質ニューラル音声で再生。
+  - **espeak-ng / espeak (オフライン)**: Linux軽量TTSエンジン。
+  - **VOICEVOX (フォールバック)**。
 
-#### 2. 処理フロー (`speak`)
-1. `convert_english_to_katakana()` による英語発音のカタカナ化。
-2. `voice_lock` の取得および `is_speaking_event.set()` によるマイク集音の一時中断。
-3. **Audio Query 生成**: `POST http://localhost:50021/audio_query?text={encoded_text}&speaker=13` (timeout: 30秒)
-4. **音声合成 (WAVバイナリ)**: `POST http://localhost:50021/synthesis?speaker=13` (timeout: 60秒)
-4. **無音パディング付加**: 生成された WAV の先頭に `0.3秒` 分の無音 PCM データを付加（オーディオインターフェースの立ち上がり遅延による「頭切れ」防止）。
-5. **ALSA aplay 再生**: `aplay -D plughw:0,0 -q temp.wav` を実行（エラー時は `default` でリトライ）。
-6. 一時ファイルの削除および `is_speaking_event.clear()` によるマイク集音再開。
+#### 2. 日本語モード (`speak`, `convert_english_to_katakana`)
+- **英語発音カタカナ化 (`convert_english_to_katakana`)**: 有名アーティスト・曲名をカタカナに自動変換し、VOICEVOX で読み上げ。
+- **無音パディング付加**: 生成された WAV の先頭に `0.3秒` 分の無音 PCM データを付加（オーディオインターフェースの立ち上がり遅延による「頭切れ」防止）。
+- **ALSA aplay 再生**: `aplay -D plughw:0,0 -q temp.wav` を実行（エラー時は `default` でリトライ）。
+- 一時ファイルの削除および `is_speaking_event.clear()` によるマイク集音再開。
 
 ---
 

@@ -49,6 +49,8 @@ VOICEVOX_URL = "http://localhost:50021"
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 SPEAKER_ID = 13  # 青山龍星（落ち着いた男性音声）
 LLM_MODEL = "qwen3.5:2b"
+ANNOUNCE_LANGUAGE = "en"  # 曲紹介の言語: "en" (英語DJモード) または "ja" (日本語)
+ENGLISH_VOICE = "en-US-ChristopherNeural"  # 英語ラジオDJ風ニューラル音声 (edge-tts)
 AUDIO_OUTPUT_NAME = "Sennheiser"  # 再生デバイス名（部分一致で自動検索）
 AUDIO_OUTPUT_DEV = None  # Noneの場合は自動検出、または "plughw:1,0" 等
 VOICE_PRE_SILENCE_SEC = 0.3  # 再生開始時の音切れ防止用
@@ -851,6 +853,202 @@ def speak(text: str):
             is_speaking_event.clear()
 
 
+GENRE_JA_TO_EN = {
+    "ジャズ": "Jazz",
+    "ロック": "Rock",
+    "ポップ": "Pop",
+    "クラシック": "Classical",
+    "ブルース": "Blues",
+    "R&B・ソウル": "Soul & R&B",
+    "エレクトロニック": "Electronic",
+    "フォーク・カントリー": "Folk & Country",
+    "ヒップホップ": "Hip-Hop",
+    "サウンドトラック・インスト": "Soundtrack",
+    "その他": "",
+}
+
+
+# ==================== 英語曲紹介ナレーション & 英語音声合成 ====================
+def build_english_track_announcement(
+    track_info: Dict[str, Any],
+    is_next: bool = False,
+    is_skip: bool = False,
+) -> str:
+    """曲情報からスマートで自然な英語FMラジオDJ曲紹介文を生成"""
+    if not track_info:
+        return "Now playing the next track. Enjoy the music." if is_next else "Now playing music."
+
+    title = track_info.get("title") or "Unknown Track"
+    artist = track_info.get("artist") or ""
+    genre = track_info.get("genre") or ""
+    mood = track_info.get("mood") or ""
+    desc = track_info.get("description") or ""
+
+    # 日本語/未設定表記のクリーンアップ
+    if artist in ("アーティスト未設定", "Unknown", "", None):
+        artist = ""
+
+    # 英語ジャンル名への変換
+    en_genre = genre
+    for ja_g, en_g in GENRE_JA_TO_EN.items():
+        if ja_g in str(genre):
+            en_genre = en_g
+            break
+
+    # 基本の英語フレーズ
+    if is_skip:
+        base_msg = f"Skipping to '{title}' by {artist}." if artist else f"Skipping to '{title}'."
+    elif is_next:
+        base_msg = f"Next up is '{title}' by {artist}." if artist else f"Next up is '{title}'."
+    else:
+        base_msg = f"Now playing: '{title}' by {artist}." if artist else f"Now playing: '{title}'."
+
+    # LLM (Ollama) による英語DJ風解説文の生成（1文・短時間）
+    if desc:
+        try:
+            prompt = (
+                f"You are a sophisticated FM Radio DJ. "
+                f"Write a smooth, natural single-sentence track introduction in English based on: "
+                f"Title: {title}, Artist: {artist}, Genre: {en_genre}, Mood: {mood}, Description: {desc[:200]}. "
+                f"Keep it under 25 words. Output ONLY the single DJ sentence without quotes or preamble."
+            )
+            payload = {
+                "model": LLM_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False,
+                "options": {"num_ctx": 1024, "temperature": 0.3, "num_predict": 48},
+            }
+            res = http_post_json(OLLAMA_CHAT_URL, payload, timeout=2.5)
+            dj_line = res.get("message", {}).get("content", "").strip()
+            dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
+            dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
+            if dj_line and len(dj_line) > 10:
+                print(f"🎙️ [English DJ] LLM英語ナレーション生成: '{dj_line}'", flush=True)
+                return dj_line
+        except Exception:
+            pass
+
+    # テンプレートによる補完
+    extra = ""
+    if en_genre:
+        extra = f" Enjoy this {en_genre} track."
+    elif mood:
+        clean_mood = mood.split(",")[0].strip()
+        extra = f" Setting a {clean_mood} mood."
+    else:
+        extra = " Enjoy the music."
+
+    return f"{base_msg}{extra}"
+
+
+def speak_english(text: str):
+    """英語テキストを Jetson スピーカーから流暢な英語音声で出力 (edge-tts / espeak / VOICEVOX)"""
+    global AUDIO_OUTPUT_DEV
+    if not text:
+        return
+
+    with voice_lock:
+        is_speaking_event.set()
+        started_at = time.monotonic()
+        print(f"🎙️ [English DJ] 英語読み上げ開始: '{text}'", flush=True)
+
+        temp_dir = "/tmp" if os.name != "nt" else os.environ.get("TEMP", ".")
+        temp_mp3 = os.path.join(temp_dir, "voice_reply_en.mp3")
+        temp_wav = os.path.join(temp_dir, "voice_reply_en.wav")
+        target_dev = AUDIO_OUTPUT_DEV or detect_alsa_output_device(AUDIO_OUTPUT_NAME)
+
+        tts_success = False
+
+        # 方法1: edge-tts (最も高音質で自然な英語ラジオDJボイス)
+        try:
+            cmd = [
+                "edge-tts",
+                "--voice", ENGLISH_VOICE,
+                "--text", text,
+                "--write-media", temp_mp3,
+            ]
+            res = subprocess.run(cmd, capture_output=True, timeout=10)
+            if res.returncode == 0 and os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 100:
+                if os.name != "nt":
+                    # ffmpeg で WAV 変換して aplay で再生
+                    conv_res = subprocess.run(
+                        ["ffmpeg", "-y", "-i", temp_mp3, "-ar", "48000", "-ac", "2", temp_wav],
+                        capture_output=True, timeout=5
+                    )
+                    if conv_res.returncode == 0 and os.path.exists(temp_wav):
+                        subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], check=False)
+                        tts_success = True
+                    else:
+                        res_mpg = subprocess.run(["mpg123", "-a", target_dev, "-q", temp_mp3], capture_output=True)
+                        if res_mpg.returncode == 0:
+                            tts_success = True
+                else:
+                    try:
+                        import winsound
+                        subprocess.run(["ffmpeg", "-y", "-i", temp_mp3, temp_wav], capture_output=True)
+                        if os.path.exists(temp_wav):
+                            winsound.PlaySound(temp_wav, winsound.SND_FILENAME)
+                            tts_success = True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 方法2: espeak-ng / espeak (オフライン英語音声合成)
+        if not tts_success and os.name != "nt":
+            try:
+                for espeak_cmd in ["espeak-ng", "espeak"]:
+                    res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "145", "-w", temp_wav, text], capture_output=True)
+                    if res.returncode == 0 and os.path.exists(temp_wav):
+                        subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], check=False)
+                        tts_success = True
+                        break
+            except Exception:
+                pass
+
+        # 方法3: Windows SAPI (Windowsローカル環境用)
+        if not tts_success and os.name == "nt":
+            try:
+                ps_cmd = f'Add-Type -AssemblyName System.speech; $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speak.Speak("{text}")'
+                subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, timeout=10)
+                tts_success = True
+            except Exception:
+                pass
+
+        # 方法4: VOICEVOX (フォールバック)
+        if not tts_success:
+            print("ℹ️ [English DJ] VOICEVOX にフォールバックします。")
+            try:
+                encoded_text = urllib.parse.quote(text)
+                query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={SPEAKER_ID}"
+                req_q = urllib.request.Request(query_url, data=b"", headers={"User-Agent": "moOde-AI/1.0"}, method="POST")
+                with urllib.request.urlopen(req_q, timeout=15) as res_q:
+                    query_data = res_q.read()
+                synth_url = f"{VOICEVOX_URL}/synthesis?speaker={SPEAKER_ID}"
+                req_s = urllib.request.Request(
+                    synth_url, data=query_data,
+                    headers={"Content-Type": "application/json", "User-Agent": "moOde-AI/1.0"}, method="POST"
+                )
+                with urllib.request.urlopen(req_s, timeout=30) as res_s:
+                    wav_bytes = res_s.read()
+                with open(temp_wav, "wb") as f:
+                    f.write(wav_bytes)
+                if os.name != "nt":
+                    subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], check=False)
+            except Exception:
+                pass
+
+        print(f"🎙️ [English DJ] 音声出力完了（{time.monotonic() - started_at:.1f}秒）", flush=True)
+
+        for p in [temp_mp3, temp_wav]:
+            if os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        is_speaking_event.clear()
+
+
 # ==================== LLM 意図解析 (Ollama) ====================
 def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
     """テキスト ➔ 意図抽出 (LLM - JSON構造化)"""
@@ -955,28 +1153,32 @@ def process_user_message(
     description = control_res.get("description", "")
     track_info = control_res.get("track_info") or {}
 
-    # 3. 再生・スキップ時、DBに description が存在すれば返答・音声読み上げ文に組み込む
+    # 3. 再生・スキップ時、曲紹介文を構築
     if cmd.get("action") in ("play_search", "next", "previous") and control_res.get("success"):
-        t_title = track_info.get("title") or "楽曲"
-        t_artist = track_info.get("artist")
-
-        clean_desc = clean_text_for_speech(description, max_chars=100)
-        prefix = "次の曲、" if cmd.get("action") == "next" else ("前の曲、" if cmd.get("action") == "previous" else "")
-
-        if clean_desc:
-            if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。{clean_desc}"
-            else:
-                reply_text = f"{prefix}『{t_title}』を再生します。{clean_desc}"
+        if ANNOUNCE_LANGUAGE == "en":
+            is_skip = cmd.get("action") in ("next", "previous")
+            reply_text = build_english_track_announcement(track_info, is_next=False, is_skip=is_skip)
+            print(f"🎙️ [English DJ ナレーション] {reply_text}", flush=True)
         else:
-            if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。"
+            t_title = track_info.get("title") or "楽曲"
+            t_artist = track_info.get("artist")
+            clean_desc = clean_text_for_speech(description, max_chars=100)
+            prefix = "次の曲、" if cmd.get("action") == "next" else ("前の曲、" if cmd.get("action") == "previous" else "")
+
+            if clean_desc:
+                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                    reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。{clean_desc}"
+                else:
+                    reply_text = f"{prefix}『{t_title}』を再生します。{clean_desc}"
             else:
-                reply_text = f"{prefix}『{t_title}』を再生します。"
+                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                    reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。"
+                else:
+                    reply_text = f"{prefix}『{t_title}』を再生します。"
 
-        print(f"📖 [音声案内テキスト] {reply_text}", flush=True)
+            print(f"📖 [音声案内テキスト] {reply_text}", flush=True)
 
-    # 4. 音声読み上げ (VOICEVOX) と moOde 音楽再生の順序制御（解説文を話し終えてから再生）
+    # 4. 音声読み上げと moOde 音楽再生の順序制御（解説文を話し終えてから再生）
     needs_playback = control_res.get("needs_playback", False)
 
     def trigger_playback_start():
@@ -987,14 +1189,17 @@ def process_user_message(
                 client.play()
                 client.close()
                 client.disconnect()
-                print("▶️ [moOde] 音声案内（解説文）完了後に音楽再生を開始しました。", flush=True)
+                print("▶️ [moOde] 音声案内完了後に音楽再生を開始しました。", flush=True)
                 broadcast_status()
             except Exception as e:
                 print(f"⚠️ [moOde] 再生開始エラー: {e}")
 
     if speak_voice:
         def speak_and_play_flow():
-            speak(reply_text)
+            if ANNOUNCE_LANGUAGE == "en" and cmd.get("action") in ("play_search", "next", "previous"):
+                speak_english(reply_text)
+            else:
+                speak(reply_text)
             if needs_playback:
                 trigger_playback_start()
 
@@ -1274,20 +1479,27 @@ def run_track_watcher_loop():
             t_artist = song.get("artist")
             db_meta = find_track_metadata(file_path=cur_file, title=t_title, artist=t_artist)
             description = db_meta.get("description", "") if db_meta else ""
-            clean_desc = clean_text_for_speech(description, max_chars=100)
+            if db_meta:
+                song["description"] = description
+                song["genre"] = db_meta.get("genre", song.get("genre", ""))
+                song["mood"] = db_meta.get("mood", song.get("mood", ""))
 
-            if clean_desc:
-                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                    announce_text = f"続いては、『{t_title}』、{t_artist}です。{clean_desc}"
-                else:
-                    announce_text = f"続いては、『{t_title}』です。{clean_desc}"
+            if ANNOUNCE_LANGUAGE == "en":
+                announce_text = build_english_track_announcement(song, is_next=True)
+                print(f"🎙️ [Watcher 英語曲紹介] {announce_text}", flush=True)
             else:
-                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                    announce_text = f"続いては、『{t_title}』、{t_artist}をお送りします。"
+                clean_desc = clean_text_for_speech(description, max_chars=100)
+                if clean_desc:
+                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                        announce_text = f"続いては、『{t_title}』、{t_artist}です。{clean_desc}"
+                    else:
+                        announce_text = f"続いては、『{t_title}』です。{clean_desc}"
                 else:
-                    announce_text = f"続いては、『{t_title}』をお送りします。"
-
-            print(f"📖 [Watcher 自動曲紹介] {announce_text}", flush=True)
+                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                        announce_text = f"続いては、『{t_title}』、{t_artist}をお送りします。"
+                    else:
+                        announce_text = f"続いては、『{t_title}』をお送りします。"
+                print(f"📖 [Watcher 自動曲紹介] {announce_text}", flush=True)
 
             # チャット履歴・Web UI にもプッシュ
             msg_record = {
@@ -1303,7 +1515,10 @@ def run_track_watcher_loop():
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             # 3. 発話を実行（排他ロックで安全に発話）
-            speak(announce_text)
+            if ANNOUNCE_LANGUAGE == "en":
+                speak_english(announce_text)
+            else:
+                speak(announce_text)
 
             # 4. 発話完了後に音楽再生を再開
             mpd_client = get_mpd_client()
@@ -1488,12 +1703,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
 # ==================== メイン実行 ====================
 def main():
-    global MOODE_IP, MOODE_PORT, AUDIO_OUTPUT_DEV
+    global MOODE_IP, MOODE_PORT, AUDIO_OUTPUT_DEV, ANNOUNCE_LANGUAGE
 
     parser = argparse.ArgumentParser(description="moOde AI Master (Voice & Web Chat Assistant)")
     parser.add_argument("--moode-ip", type=str, default=MOODE_IP, help="moOde (MPD) IP address")
     parser.add_argument("--moode-port", type=int, default=MOODE_PORT, help="moOde (MPD) port")
     parser.add_argument("--audio-dev", type=str, default=None, help="Audio output ALSA device (e.g. plughw:1,0, default)")
+    parser.add_argument("--lang", type=str, default="en", choices=["en", "ja"], help="Announcement language: en (English DJ) or ja (Japanese)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Web server host")
     parser.add_argument("--port", type=int, default=8000, help="Web server port")
     parser.add_argument("--no-voice", action="store_true", help="Disable microphone voice listener thread")
@@ -1501,6 +1717,7 @@ def main():
 
     MOODE_IP = args.moode_ip
     MOODE_PORT = args.moode_port
+    ANNOUNCE_LANGUAGE = args.lang
 
     if args.audio_dev:
         AUDIO_OUTPUT_DEV = args.audio_dev
@@ -1509,10 +1726,11 @@ def main():
 
     print("=" * 60)
     print(" 🎵 moOde AI Master (Voice & Web Chat Assistant)")
-    print(f" 📡 moOde IP : {MOODE_IP}:{MOODE_PORT}")
-    print(f" 🔊 音声出力 : {AUDIO_OUTPUT_DEV}")
-    print(f" 🌐 Web UI   : http://{args.host}:{args.port} (ブラウザでアクセス)")
-    print(f" 🎙️ 音声入力 : {'無効 (--no-voice)' if args.no_voice else '有効 (ヘイ、マスター)'}")
+    print(f" 📡 moOde IP   : {MOODE_IP}:{MOODE_PORT}")
+    print(f" 🔊 音声出力   : {AUDIO_OUTPUT_DEV}")
+    print(f" 🎙️ ナレーション: {'英語 DJ モード (English)' if ANNOUNCE_LANGUAGE == 'en' else '日本語モード (Japanese)'}")
+    print(f" 🌐 Web UI     : http://{args.host}:{args.port} (ブラウザでアクセス)")
+    print(f" 🎙️ 音声入力   : {'無効 (--no-voice)' if args.no_voice else '有効 (ヘイ、マスター)'}")
     print("=" * 60)
 
     # 自動トラック変更監視スレッド起動（2曲目以降の自動曲紹介）
