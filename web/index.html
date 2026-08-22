@@ -1,0 +1,1454 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>moOde AI Master | Web Chat & Audio Control</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #07090e;
+      --bg-secondary: #0d121d;
+      --bg-card: rgba(18, 24, 38, 0.72);
+      --bg-card-hover: rgba(28, 38, 58, 0.85);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-focus: rgba(0, 242, 254, 0.5);
+      
+      --accent-cyan: #00f2fe;
+      --accent-blue: #4facfe;
+      --accent-purple: #7928ca;
+      --accent-pink: #ff0080;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+
+      --grad-cyan-blue: linear-gradient(135deg, #00f2fe 0%, #4facfe 100%);
+      --grad-purple-pink: linear-gradient(135deg, #7928ca 0%, #ff0080 100%);
+      --grad-dark-glow: radial-gradient(circle at 50% 0%, rgba(79, 172, 254, 0.15), transparent 70%);
+
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --radius-full: 9999px;
+
+      --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.3);
+      --shadow-glow: 0 0 25px rgba(0, 242, 254, 0.25);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', 'Noto Sans JP', sans-serif;
+      background-color: var(--bg-primary);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(121, 40, 202, 0.12) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(0, 242, 254, 0.1) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, rgba(16, 185, 129, 0.05) 0px, transparent 60%);
+      background-attachment: fixed;
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(0, 0, 0, 0.2);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(0, 242, 254, 0.4);
+    }
+
+    /* Header */
+    header {
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      background: rgba(13, 18, 29, 0.8);
+      border-bottom: 1px solid var(--border-color);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: var(--radius-md);
+      background: var(--grad-cyan-blue);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 0 16px rgba(0, 242, 254, 0.4);
+      animation: pulse-glow 3s infinite alternate;
+    }
+
+    @keyframes pulse-glow {
+      0% { box-shadow: 0 0 10px rgba(0, 242, 254, 0.3); }
+      100% { box-shadow: 0 0 20px rgba(0, 242, 254, 0.7); }
+    }
+
+    .brand-text h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(90deg, #fff 0%, #a5f3fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-text p {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.8rem;
+      padding: 6px 12px;
+      border-radius: var(--radius-full);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-dim);
+    }
+
+    .status-dot.online {
+      background: var(--accent-emerald);
+      box-shadow: 0 0 8px var(--accent-emerald);
+    }
+
+    .status-dot.active {
+      background: var(--accent-cyan);
+      box-shadow: 0 0 8px var(--accent-cyan);
+      animation: blink 1.2s infinite;
+    }
+
+    .status-dot.offline {
+      background: var(--accent-rose);
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .toggle-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .toggle-switch {
+      position: relative;
+      width: 38px;
+      height: 20px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: var(--radius-full);
+      transition: background 0.3s;
+    }
+
+    .toggle-switch::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: white;
+      transition: transform 0.3s;
+    }
+
+    input[type="checkbox"]:checked + .toggle-switch {
+      background: var(--accent-cyan);
+    }
+
+    input[type="checkbox"]:checked + .toggle-switch::after {
+      transform: translateX(18px);
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 20px 24px;
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 24px;
+      height: calc(100vh - 70px);
+    }
+
+    @media (max-width: 992px) {
+      main {
+        grid-template-columns: 1fr;
+        height: auto;
+        padding: 16px;
+      }
+    }
+
+    /* Common Card Styles */
+    .glass-card {
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Left Panel: Chat & AI Assistant */
+    .chat-panel {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .voice-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      padding: 4px 10px;
+      border-radius: var(--radius-full);
+      background: rgba(0, 242, 254, 0.1);
+      border: 1px solid rgba(0, 242, 254, 0.25);
+      color: var(--accent-cyan);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Quick Action Chips */
+    .chips-container {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 10px;
+      margin-bottom: 10px;
+      scrollbar-width: none;
+    }
+    .chips-container::-webkit-scrollbar {
+      display: none;
+    }
+
+    .chip-btn {
+      white-space: nowrap;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 6px 14px;
+      border-radius: var(--radius-full);
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .chip-btn:hover {
+      background: rgba(0, 242, 254, 0.12);
+      border-color: rgba(0, 242, 254, 0.4);
+      color: #fff;
+      transform: translateY(-2px);
+    }
+
+    .chip-btn:active {
+      transform: translateY(0);
+    }
+
+    /* Chat Messages Box */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 250px;
+    }
+
+    .message {
+      display: flex;
+      gap: 12px;
+      max-width: 85%;
+      animation: message-in 0.3s ease-out;
+    }
+
+    @keyframes message-in {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message.user {
+      align-self: flex-end;
+      flex-direction: row-reverse;
+    }
+
+    .message.system, .message.assistant {
+      align-self: flex-start;
+    }
+
+    .msg-avatar {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+
+    .message.user .msg-avatar {
+      background: var(--grad-purple-pink);
+      box-shadow: 0 0 12px rgba(121, 40, 202, 0.4);
+    }
+
+    .message.assistant .msg-avatar {
+      background: var(--grad-cyan-blue);
+      box-shadow: 0 0 12px rgba(0, 242, 254, 0.4);
+    }
+
+    .msg-content {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .msg-bubble {
+      padding: 12px 16px;
+      border-radius: var(--radius-md);
+      font-size: 0.92rem;
+      line-height: 1.5;
+      position: relative;
+    }
+
+    .message.user .msg-bubble {
+      background: linear-gradient(135deg, rgba(121, 40, 202, 0.6) 0%, rgba(255, 0, 128, 0.6) 100%);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-bottom-right-radius: 4px;
+      color: #fff;
+    }
+
+    .message.assistant .msg-bubble {
+      background: rgba(26, 35, 54, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-bottom-left-radius: 4px;
+      color: var(--text-main);
+    }
+
+    .msg-source-tag {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 2px;
+    }
+
+    .message.user .msg-source-tag {
+      justify-content: flex-end;
+    }
+
+    .track-action-card {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      background: rgba(0, 242, 254, 0.06);
+      border: 1px solid rgba(0, 242, 254, 0.2);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.82rem;
+    }
+
+    .track-action-icon {
+      font-size: 1.2rem;
+    }
+
+    .track-action-info {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .track-action-info strong {
+      color: var(--accent-cyan);
+    }
+
+    /* Typing Indicator */
+    .typing-indicator {
+      display: none;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 14px;
+      background: rgba(26, 35, 54, 0.6);
+      border-radius: var(--radius-md);
+      width: fit-content;
+      margin-bottom: 8px;
+    }
+    .typing-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--accent-cyan);
+      animation: typing-bounce 1.4s infinite ease-in-out;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes typing-bounce {
+      0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
+      40% { transform: translateY(-6px); opacity: 1; }
+    }
+
+    /* Chat Input Form */
+    .chat-input-area {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .chat-input-form {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(10, 14, 22, 0.7);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-full);
+      padding: 6px 8px 6px 18px;
+      transition: all 0.25s;
+    }
+
+    .chat-input-form:focus-within {
+      border-color: var(--accent-cyan);
+      box-shadow: 0 0 15px rgba(0, 242, 254, 0.2);
+    }
+
+    .chat-input-field {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #fff;
+      font-size: 0.95rem;
+      font-family: inherit;
+    }
+
+    .chat-input-field::placeholder {
+      color: var(--text-dim);
+    }
+
+    .send-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: none;
+      background: var(--grad-cyan-blue);
+      color: #07090e;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+
+    .send-btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 14px rgba(0, 242, 254, 0.5);
+    }
+
+    .send-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    /* Right Panel: moOde Player & Controls */
+    .player-panel {
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .now-playing-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      padding: 10px 0;
+      position: relative;
+    }
+
+    /* Vinyl Disc Art */
+    .vinyl-wrapper {
+      position: relative;
+      width: 170px;
+      height: 170px;
+      margin-bottom: 16px;
+    }
+
+    .vinyl-disc {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: radial-gradient(circle, #1a1e29 0%, #0c0f17 50%, #05060a 100%);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(255, 255, 255, 0.05);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      animation: spin-vinyl 16s linear infinite;
+      animation-play-state: paused;
+    }
+
+    .vinyl-disc.playing {
+      animation-play-state: running;
+    }
+
+    @keyframes spin-vinyl {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .vinyl-grooves {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: repeating-radial-gradient(
+        circle,
+        transparent 0,
+        transparent 4px,
+        rgba(255, 255, 255, 0.02) 5px,
+        transparent 6px
+      );
+    }
+
+    .vinyl-center {
+      width: 65px;
+      height: 65px;
+      border-radius: 50%;
+      background: var(--grad-cyan-blue);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
+      font-size: 24px;
+      z-index: 2;
+    }
+
+    /* Audio Visualizer Canvas */
+    .visualizer-canvas {
+      width: 100%;
+      height: 40px;
+      margin: 8px 0;
+      opacity: 0.85;
+    }
+
+    .track-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .track-artist {
+      font-size: 0.9rem;
+      color: var(--accent-cyan);
+      margin-bottom: 4px;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .track-album {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .badge-hires {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: #000;
+      margin-top: 6px;
+      letter-spacing: 0.05em;
+    }
+
+    /* Progress & Timing */
+    .progress-section {
+      width: 100%;
+      margin: 12px 0 6px 0;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: var(--radius-full);
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--grad-cyan-blue);
+      border-radius: var(--radius-full);
+      transition: width 0.3s linear;
+    }
+
+    .time-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      margin-top: 4px;
+    }
+
+    /* Player Controls */
+    .controls-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      margin: 10px 0;
+    }
+
+    .ctrl-btn {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      color: #fff;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: all 0.2s;
+    }
+
+    .ctrl-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.3);
+      transform: scale(1.08);
+    }
+
+    .ctrl-btn.play-main {
+      width: 58px;
+      height: 58px;
+      background: var(--grad-cyan-blue);
+      color: #07090e;
+      font-size: 1.5rem;
+      box-shadow: 0 0 20px rgba(0, 242, 254, 0.4);
+    }
+
+    .ctrl-btn.play-main:hover {
+      transform: scale(1.08);
+      box-shadow: 0 0 28px rgba(0, 242, 254, 0.7);
+    }
+
+    /* Volume Control */
+    .volume-box {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px;
+      background: rgba(10, 14, 22, 0.5);
+      border-radius: var(--radius-full);
+      border: 1px solid var(--border-color);
+      width: 100%;
+      margin-top: 4px;
+    }
+
+    .volume-icon {
+      font-size: 1rem;
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .volume-slider {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: var(--radius-full);
+      outline: none;
+    }
+
+    .volume-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent-cyan);
+      cursor: pointer;
+      box-shadow: 0 0 8px var(--accent-cyan);
+      transition: transform 0.15s;
+    }
+
+    .volume-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.2);
+    }
+
+    .volume-value {
+      font-size: 0.75rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-dim);
+      min-width: 35px;
+      text-align: right;
+    }
+
+    /* Live Voice Indicator Banner */
+    .voice-live-status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(13, 18, 29, 0.7);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-color);
+      font-size: 0.8rem;
+    }
+
+    .voice-indicator {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .voice-sound-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 14px;
+    }
+
+    .sound-bar {
+      width: 3px;
+      background: var(--accent-cyan);
+      border-radius: 2px;
+      height: 4px;
+      transition: height 0.1s;
+    }
+
+    .voice-sound-bars.listening .sound-bar:nth-child(1) { animation: sound-wave 0.8s infinite alternate 0.1s; }
+    .voice-sound-bars.listening .sound-bar:nth-child(2) { animation: sound-wave 0.8s infinite alternate 0.3s; }
+    .voice-sound-bars.listening .sound-bar:nth-child(3) { animation: sound-wave 0.8s infinite alternate 0.2s; }
+    .voice-sound-bars.listening .sound-bar:nth-child(4) { animation: sound-wave 0.8s infinite alternate 0.4s; }
+
+    @keyframes sound-wave {
+      0% { height: 4px; }
+      100% { height: 14px; }
+    }
+
+    /* Toast Notification */
+    .toast-container {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .toast {
+      padding: 10px 16px;
+      border-radius: var(--radius-md);
+      background: rgba(19, 25, 38, 0.95);
+      backdrop-filter: blur(10px);
+      border: 1px solid var(--border-color);
+      color: #fff;
+      font-size: 0.85rem;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+      animation: toast-in 0.3s ease-out;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">🎵</div>
+      <div class="brand-text">
+        <h1>moOde AI Master</h1>
+        <p>Jetson Orin Nano Super × Raspberry Pi 5</p>
+      </div>
+    </div>
+
+    <div class="header-status">
+      <div class="status-badge" id="moodeStatusBadge">
+        <div class="status-dot" id="moodeDot"></div>
+        <span id="moodeStatusText">moOde: 接続中...</span>
+      </div>
+
+      <div class="status-badge" id="wsStatusBadge">
+        <div class="status-dot" id="wsDot"></div>
+        <span id="wsStatusText">WebSocket</span>
+      </div>
+
+      <label class="toggle-wrapper" title="Webチャット時にもJetsonのスピーカーから声を出すか設定">
+        <input type="checkbox" id="voiceSpeakToggle" checked style="display: none;">
+        <div class="toggle-switch"></div>
+        <span>🔊 音声読み上げ</span>
+      </label>
+    </div>
+  </header>
+
+  <!-- Main Grid -->
+  <main>
+    <!-- Left: Chat & AI Interface -->
+    <section class="glass-card chat-panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span>💬 AI Music Chat</span>
+          <span class="voice-badge">🤖 Qwen + Whisper + VOICEVOX</span>
+        </div>
+      </div>
+
+      <!-- Quick Action Chips -->
+      <div class="chips-container">
+        <button class="chip-btn" onclick="sendQuickPrompt('Jazzをかけて')">🎷 ジャズを再生</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('落ち着いたリラックスできる曲をかけて')">☕ カフェ・リラックス</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('テンポの良いロックを流して')">🎸 ノリの良いロック</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('80年代の邦楽をかけて')">📼 80年代 邦楽</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('ハイレゾ音源の曲をかけて')">💎 ハイレゾ音源</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('音楽を止めて')">⏹️ 停止</button>
+        <button class="chip-btn" onclick="sendQuickPrompt('次の曲にして')">⏭️ スキップ</button>
+      </div>
+
+      <!-- Messages Timeline -->
+      <div class="chat-messages" id="chatMessages">
+        <div class="message assistant">
+          <div class="msg-avatar">🤖</div>
+          <div class="msg-content">
+            <div class="msg-bubble">
+              こんにちは！moOde AI アシスタントです。<br>
+              マイクに向かって<strong>「ヘイ、マスター」</strong>と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。
+            </div>
+            <div class="msg-source-tag">🤖 System Initialized</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Typing Indicator -->
+      <div class="typing-indicator" id="typingIndicator">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <span style="font-size: 0.75rem; color: var(--text-dim); margin-left: 6px;">AIが選曲中...</span>
+      </div>
+
+      <!-- Live Voice Listener Status -->
+      <div class="voice-live-status">
+        <div class="voice-indicator">
+          <div class="voice-sound-bars" id="soundBars">
+            <div class="sound-bar"></div>
+            <div class="sound-bar"></div>
+            <div class="sound-bar"></div>
+            <div class="sound-bar"></div>
+          </div>
+          <span id="voiceListenerText">🎙️ 音声待機中 (「ヘイ、マスター」)</span>
+        </div>
+        <span style="color: var(--text-dim); font-size: 0.75rem;" id="voiceDetailText">Sennheiser SP 20</span>
+      </div>
+
+      <!-- Input Form -->
+      <div class="chat-input-area">
+        <form class="chat-input-form" id="chatForm" onsubmit="handleChatSubmit(event)">
+          <input type="text" class="chat-input-field" id="chatInput" placeholder="例: 「Jazzをかけて」「ビートルズを再生して」「音量を上げて」..." autocomplete="off">
+          <button type="submit" class="send-btn" id="sendBtn" title="送信">➤</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- Right: moOde Player & Controls -->
+    <section class="glass-card player-panel">
+      <div class="panel-header">
+        <div class="panel-title">
+          <span>🎵 moOde Player</span>
+        </div>
+        <span style="font-size: 0.8rem; color: var(--text-dim);" id="moodeIpLabel">IP: 192.168.68.198:6600</span>
+      </div>
+
+      <!-- Vinyl & Now Playing -->
+      <div class="now-playing-container">
+        <div class="vinyl-wrapper">
+          <div class="vinyl-disc" id="vinylDisc">
+            <div class="vinyl-grooves"></div>
+            <div class="vinyl-center">🎧</div>
+          </div>
+        </div>
+
+        <!-- Spectrum Visualizer -->
+        <canvas class="visualizer-canvas" id="visualizerCanvas"></canvas>
+
+        <div class="track-title" id="trackTitle">再生停止中</div>
+        <div class="track-artist" id="trackArtist">アーティスト未選択</div>
+        <div class="track-album" id="trackAlbum">moOde Audio Library</div>
+        <div id="hiresBadgeContainer"></div>
+
+        <!-- Progress Section -->
+        <div class="progress-section">
+          <div class="progress-bar-container" id="progressBar" onclick="handleSeek(event)">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+          <div class="time-labels">
+            <span id="currentTime">0:00</span>
+            <span id="totalTime">0:00</span>
+          </div>
+        </div>
+
+        <!-- Player Controls -->
+        <div class="controls-row">
+          <button class="ctrl-btn" onclick="sendPlayerAction('previous')" title="前の曲">⏮</button>
+          <button class="ctrl-btn play-main" id="playPauseBtn" onclick="togglePlayPause()" title="再生/一時停止">▶</button>
+          <button class="ctrl-btn" onclick="sendPlayerAction('next')" title="次の曲">⏭</button>
+          <button class="ctrl-btn" onclick="sendPlayerAction('stop')" title="停止">⏹</button>
+        </div>
+
+        <!-- Volume -->
+        <div class="volume-box">
+          <div class="volume-icon" onclick="toggleMute()" id="volIcon">🔊</div>
+          <input type="range" class="volume-slider" id="volSlider" min="0" max="100" value="50" oninput="handleVolumeChange(event)">
+          <div class="volume-value" id="volText">50%</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast-container" id="toastContainer"></div>
+
+  <script>
+    // State
+    let isPlaying = false;
+    let currentVolume = 50;
+    let ws = null;
+    let reconnectInterval = 3000;
+    let visualizerAnimationId = null;
+
+    // Elements
+    const chatMessages = document.getElementById('chatMessages');
+    const chatInput = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const typingIndicator = document.getElementById('typingIndicator');
+    const voiceSpeakToggle = document.getElementById('voiceSpeakToggle');
+    const vinylDisc = document.getElementById('vinylDisc');
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    const trackTitle = document.getElementById('trackTitle');
+    const trackArtist = document.getElementById('trackArtist');
+    const trackAlbum = document.getElementById('trackAlbum');
+    const hiresBadgeContainer = document.getElementById('hiresBadgeContainer');
+    const progressFill = document.getElementById('progressFill');
+    const currentTimeEl = document.getElementById('currentTime');
+    const totalTimeEl = document.getElementById('totalTime');
+    const volSlider = document.getElementById('volSlider');
+    const volText = document.getElementById('volText');
+    const moodeDot = document.getElementById('moodeDot');
+    const moodeStatusText = document.getElementById('moodeStatusText');
+    const wsDot = document.getElementById('wsDot');
+    const wsStatusText = document.getElementById('wsStatusText');
+    const soundBars = document.getElementById('soundBars');
+    const voiceListenerText = document.getElementById('voiceListenerText');
+
+    // Canvas Visualizer
+    const canvas = document.getElementById('visualizerCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      if (canvas && canvas.parentElement) {
+        canvas.width = canvas.parentElement.clientWidth || 300;
+        canvas.height = 40;
+      }
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    function drawVisualizer() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const barCount = 32;
+      const barWidth = (canvas.width / barCount) - 3;
+
+      for (let i = 0; i < barCount; i++) {
+        let barHeight = 2;
+        if (isPlaying) {
+          const t = Date.now() / 200 + i * 0.4;
+          barHeight = Math.sin(t) * 14 + Math.cos(t * 1.5) * 8 + 18;
+          barHeight = Math.max(3, Math.min(canvas.height - 2, barHeight));
+        }
+
+        const x = i * (barWidth + 3);
+        const y = canvas.height - barHeight;
+
+        const grad = ctx.createLinearGradient(0, y, 0, canvas.height);
+        grad.addColorStop(0, '#00f2fe');
+        grad.addColorStop(1, '#7928ca');
+
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(x, y, barWidth, barHeight, [2, 2, 0, 0]);
+        } else {
+          ctx.rect(x, y, barWidth, barHeight);
+        }
+        ctx.fill();
+      }
+
+      visualizerAnimationId = requestAnimationFrame(drawVisualizer);
+    }
+    drawVisualizer();
+
+    // WebSocket Connection
+    function initWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        wsDot.className = 'status-dot online';
+        wsStatusText.textContent = 'WS: 接続中';
+        showToast('🟢 サーバーと接続しました');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleServerEvent(data);
+        } catch (e) {
+          console.error('WS parse error:', e);
+        }
+      };
+
+      ws.onclose = () => {
+        wsDot.className = 'status-dot offline';
+        wsStatusText.textContent = 'WS: 切断';
+        setTimeout(initWebSocket, reconnectInterval);
+      };
+
+      ws.onerror = (err) => {
+        console.error('WS Error:', err);
+        ws.close();
+      };
+    }
+
+    // Handle incoming events from Server
+    function handleServerEvent(data) {
+      if (data.type === 'status_update') {
+        updatePlayerUI(data.player_status);
+        updateVoiceStatus(data.voice_status);
+      } else if (data.type === 'chat_message') {
+        appendMessage(data.message);
+      } else if (data.type === 'voice_event') {
+        handleVoiceEvent(data);
+      }
+    }
+
+    function handleVoiceEvent(data) {
+      if (data.event === 'listening') {
+        soundBars.classList.add('listening');
+        voiceListenerText.textContent = '🎙️ 音声を録音・解析中...';
+      } else if (data.event === 'idle') {
+        soundBars.classList.remove('listening');
+        voiceListenerText.textContent = '🎙️ 音声待機中 (「ヘイ、マスター」)';
+      }
+    }
+
+    // Update Player UI
+    function updatePlayerUI(status) {
+      if (!status || !status.connected) {
+        moodeDot.className = 'status-dot offline';
+        moodeStatusText.textContent = 'moOde: 切断';
+        isPlaying = false;
+        vinylDisc.classList.remove('playing');
+        playPauseBtn.textContent = '▶';
+        return;
+      }
+
+      moodeDot.className = 'status-dot online';
+      moodeStatusText.textContent = 'moOde: 接続中';
+
+      const state = status.state; // 'play', 'pause', 'stop'
+      isPlaying = (state === 'play');
+
+      if (isPlaying) {
+        vinylDisc.classList.add('playing');
+        playPauseBtn.textContent = '⏸';
+      } else {
+        vinylDisc.classList.remove('playing');
+        playPauseBtn.textContent = '▶';
+      }
+
+      // Track info
+      const song = status.song || {};
+      trackTitle.textContent = song.title || (isPlaying ? 'タイトル不明' : '再生停止中');
+      trackArtist.textContent = song.artist || 'アーティスト未選択';
+      trackAlbum.textContent = song.album || (song.file ? song.file.split('/').pop() : 'moOde Library');
+
+      // Hi-Res
+      if (song.is_hires || (song.sample_rate && parseInt(song.sample_rate) > 48000) || (song.bit_depth && parseInt(song.bit_depth) > 16)) {
+        hiresBadgeContainer.innerHTML = `<span class="badge-hires">⚡ HI-RES ${song.sample_rate || ''} ${song.bit_depth ? song.bit_depth + 'bit' : ''}</span>`;
+      } else {
+        hiresBadgeContainer.innerHTML = '';
+      }
+
+      // Time & Progress
+      const elapsed = parseFloat(status.elapsed) || 0;
+      const duration = parseFloat(status.duration) || 0;
+      currentTimeEl.textContent = formatTime(elapsed);
+      totalTimeEl.textContent = formatTime(duration);
+
+      if (duration > 0) {
+        const pct = (elapsed / duration) * 100;
+        progressFill.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+      } else {
+        progressFill.style.width = isPlaying ? '100%' : '0%';
+      }
+
+      // Volume
+      if (status.volume !== undefined && status.volume !== null && status.volume !== '-1') {
+        currentVolume = parseInt(status.volume);
+        volSlider.value = currentVolume;
+        volText.textContent = `${currentVolume}%`;
+      }
+    }
+
+    function updateVoiceStatus(voiceStatus) {
+      if (!voiceStatus) return;
+      if (voiceStatus.is_listening) {
+        soundBars.classList.add('listening');
+        voiceListenerText.textContent = '🎙️ 認識中: ' + (voiceStatus.state || '音声を処理中');
+      } else {
+        soundBars.classList.remove('listening');
+        voiceListenerText.textContent = '🎙️ 音声待機中 (「ヘイ、マスター」)';
+      }
+    }
+
+    function formatTime(sec) {
+      sec = Math.floor(sec);
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+    // Chat handling
+    async function handleChatSubmit(e) {
+      if (e) e.preventDefault();
+      const text = chatInput.value.trim();
+      if (!text) return;
+
+      // Add user message locally
+      appendMessage({
+        sender: 'user',
+        text: text,
+        source: 'chat',
+        timestamp: new Date().toLocaleTimeString()
+      });
+
+      chatInput.value = '';
+      chatInput.disabled = true;
+      sendBtn.disabled = true;
+      typingIndicator.style.display = 'flex';
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: text,
+            speak: voiceSpeakToggle.checked
+          })
+        });
+
+        const data = await res.json();
+        typingIndicator.style.display = 'none';
+
+        if (data.reply) {
+          appendMessage({
+            sender: 'assistant',
+            text: data.reply,
+            source: 'ai',
+            action: data.action,
+            query: data.query,
+            tracks_added: data.tracks_added,
+            timestamp: new Date().toLocaleTimeString()
+          });
+        }
+      } catch (err) {
+        typingIndicator.style.display = 'none';
+        appendMessage({
+          sender: 'assistant',
+          text: '⚠️ エラーが発生しました: ' + err.message,
+          source: 'system'
+        });
+      } finally {
+        chatInput.disabled = false;
+        sendBtn.disabled = false;
+        chatInput.focus();
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+    }
+
+    function sendQuickPrompt(text) {
+      chatInput.value = text;
+      handleChatSubmit();
+    }
+
+    function appendMessage(msg) {
+      const isUser = (msg.sender === 'user');
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
+
+      const avatar = document.createElement('div');
+      avatar.className = 'msg-avatar';
+      avatar.textContent = isUser ? (msg.source === 'voice' ? '🎤' : '👤') : '🤖';
+
+      const content = document.createElement('div');
+      content.className = 'msg-content';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'msg-bubble';
+      bubble.innerHTML = escapeHtml(msg.text).replace(/\n/g, '<br>');
+
+      // Action card if music was controlled
+      if (msg.action && msg.action !== 'unknown') {
+        const actionCard = document.createElement('div');
+        actionCard.className = 'track-action-card';
+        let actionIcon = '🎵';
+        let actionText = '';
+
+        if (msg.action === 'play_search') {
+          actionIcon = '▶️';
+          actionText = `検索再生: <strong>${escapeHtml(msg.query || '')}</strong>`;
+        } else if (msg.action === 'pause') {
+          actionIcon = '⏸️';
+          actionText = '音楽を一時停止しました';
+        } else if (msg.action === 'stop') {
+          actionIcon = '⏹️';
+          actionText = '音楽を停止しました';
+        } else if (msg.action === 'next') {
+          actionIcon = '⏭️';
+          actionText = '次の曲へスキップしました';
+        }
+
+        if (msg.tracks_added && msg.tracks_added.length > 0) {
+          actionText += ` (${msg.tracks_added.length}曲 追加)`;
+        }
+
+        actionCard.innerHTML = `<span class="track-action-icon">${actionIcon}</span><div class="track-action-info">${actionText}</div>`;
+        bubble.appendChild(actionCard);
+      }
+
+      const sourceTag = document.createElement('div');
+      sourceTag.className = 'msg-source-tag';
+      sourceTag.textContent = `${msg.source === 'voice' ? '🎙️ 音声入力' : (isUser ? '💬 Web Chat' : '🤖 AI Response')} • ${msg.timestamp || new Date().toLocaleTimeString()}`;
+
+      content.appendChild(bubble);
+      content.appendChild(sourceTag);
+      msgDiv.appendChild(avatar);
+      msgDiv.appendChild(content);
+
+      chatMessages.appendChild(msgDiv);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Player Controls API
+    async function sendPlayerAction(action, value = null) {
+      try {
+        const payload = { action: action };
+        if (value !== null) payload.value = value;
+        const res = await fetch('/api/player/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.status) {
+          updatePlayerUI(data.status);
+        }
+      } catch (e) {
+        showToast('⚠️ 操作エラー: ' + e.message);
+      }
+    }
+
+    function togglePlayPause() {
+      sendPlayerAction(isPlaying ? 'pause' : 'play');
+    }
+
+    function handleVolumeChange(e) {
+      const val = parseInt(e.target.value);
+      volText.textContent = `${val}%`;
+      sendPlayerAction('volume', val);
+    }
+
+    function toggleMute() {
+      if (currentVolume > 0) {
+        sendPlayerAction('volume', 0);
+      } else {
+        sendPlayerAction('volume', 50);
+      }
+    }
+
+    function handleSeek(e) {
+      // Future seek functionality
+    }
+
+    // Toast
+    function showToast(text) {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = 'toast';
+      toast.textContent = text;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(10px)';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    // Fetch initial status and chat history
+    async function loadInitialData() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        if (data.player_status) {
+          updatePlayerUI(data.player_status);
+        }
+      } catch (e) {
+        console.warn('Initial status fetch failed:', e);
+      }
+    }
+
+    // Start
+    initWebSocket();
+    loadInitialData();
+    // Poll player status periodically
+    setInterval(async () => {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        if (data.player_status) {
+          updatePlayerUI(data.player_status);
+        }
+      } catch (e) {}
+    }, 2500);
+  </script>
+</body>
+</html>

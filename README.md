@@ -2,12 +2,15 @@
 
 NASなどのストレージに保存された楽曲ファイル（MP3 / FLAC）からタグ情報（ID3 / Vorbis）を抽出し、Web検索とLLM（Lemonade Server）を活用してリッチなメタデータ（ジャンル、ムード、エネルギーレベル、日本語の楽曲説明など）を生成して SQLite データベースに蓄積するツールです。
 
+> 📖 **Jetson Orin 等でのアプリ開発向けDB仕様書**: データベースの構造・カラム定義・SQL活用例・Text-to-SQL用プロンプト定義などは [DB_SPEC.md](DB_SPEC.md) をご覧ください。
+
 ---
 
 ## 主な機能
 
-- **タグ・音源情報自動抽出**: MP3 / FLAC ファイルからタイトル、アーティスト、アルバム、リリース年に加え、ファイル形式 (`file_format`)、サンプリングレート (`sample_rate`)、ビット深度 (`bit_depth`) を抽出
+- **タグ・音源情報自動抽出**: MP3 / FLAC ファイルからタイトル、アーティスト、アルバム、リリース年に加え、ファイル形式 (`file_format`)、サンプリングレート (`sample_rate`)、ビット深度 (`bit_depth`)、再生時間 (`duration_seconds`) を抽出
 - **ハイレゾ自動判定 (`is_hires`)**: ロスレス音源でサンプリングレートが 48kHz 超または量子化ビット数が 16bit 超（24bit等）のハイレゾ音源を自動判定
+- **長尺音源（20分以上）の自動除外**: DVD音声取り出し等の 20分（1200秒）以上の長尺ファイルは LLM 解析・DB 登録対象から自動除外（既存 DB 内の長尺音源も起動時にクリーンアップ）
 - **Web検索による情報補完**: DuckDuckGo 検索で楽曲の背景情報やレビューを自動取得
 - **LLMによるメタデータ構造化**: Lemonade Server 経由で以下の情報を自動生成
   - 楽曲区分 (`MUSIC_CATEGORY`: `邦楽` / `洋楽` / `その他`)
@@ -103,6 +106,26 @@ python build_music_db.py --flac-only --limit 0 --reset
 
 ---
 
+## 既存DBからの長尺音源（20分以上）削除ツール
+
+すでにデータベースに登録されている楽曲の中から、DVD音声などの 20分（1,200秒）以上の長尺ファイルを検出し、SQLiteデータベースから一括削除する専用スクリプト `cleanup_long_tracks.py` を用意しています。
+
+```bash
+# 1. まず対象となる長尺音源の一覧を確認（削除は行わない）
+python cleanup_long_tracks.py --dry-run
+
+# 2. 確認しながら削除を実行
+python cleanup_long_tracks.py
+
+# 3. 確認プロンプトをスキップして即座に削除（VACUUMも実行）
+python cleanup_long_tracks.py -y
+
+# 4. しきい値の分数を変更して実行（例: 30分以上を削除）
+python cleanup_long_tracks.py --minutes 30
+```
+
+---
+
 ## コマンドライン引数一覧
 
 | 引数 | 型 / 選択肢 | デフォルト値 | 説明 |
@@ -126,6 +149,7 @@ python build_music_db.py --flac-only --limit 0 --reset
 | `is_hires` | `INTEGER` | ハイレゾ音源フラグ (`1`: ハイレゾ, `0`: 通常音源) |
 | `sample_rate` | `INTEGER` | サンプリング周波数 (Hz, 例: `44100`, `96000`) |
 | `bit_depth` | `INTEGER` | 量子化ビット数 (bit, 例: `16`, `24`) |
+| `duration_seconds` | `INTEGER` | 再生時間（秒）※ 20分（1200秒）以上は登録除外 |
 | `title` | `TEXT` | 楽曲タイトル |
 | `artist` | `TEXT` | アーティスト名 |
 | `album` | `TEXT` | アルバム名 |
@@ -138,3 +162,47 @@ python build_music_db.py --flac-only --limit 0 --reset
 | `performers` | `TEXT` | 演奏者・参加アーティスト |
 | `description` | `TEXT` | **楽曲の背景・解説文（日本語）** |
 | `analyzed_at` | `TIMESTAMP` | 解析・登録日時 |
+
+---
+
+## moOde 音声 & Web Chat AI システム (`voice_bot.py`)
+
+Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と **Webブラウザ（スマホ・PC）からのチャット入力** の双方から Raspberry Pi 5 上の moOde audio (MPD) をシームレスに操作・音楽再生できるAIアシスタントです。
+
+### 🌟 特徴
+- **ハイブリッド操作**: マイクに向かって「ヘイ、マスター、Jazzをかけて」と話しかけても、ブラウザのチャット欄に入力しても即座に反応
+- **リアルタイム双方向同期**: 音声認識された内容・AIの返答・再生中の曲名が WebSocket 経由でブラウザ画面にリアルタイム表示
+- **グラスモフィズム Web UI**: アナログレコードアニメーション、オーディオビジュアライザー、再生/一時停止/スキップ/音量調整、ハイレゾバッジ表示
+- **SQLite DB 連携**: `music_meta.db` のリッチなメタデータ（ムード、エネルギー、ハイレゾ、ジャンル）を活用した選曲
+- **VOICEVOX 音声読み上げ**: Jetson スピーカーからの自然な音声返答（Web UI 上で音声出力のON/OFF切り替え可能）
+
+### 🚀 起動方法
+
+```bash
+# 1. 音声リスナー ＋ Webサーバー を同時起動 (デフォルト: ポート 8000)
+python voice_bot.py
+
+# 2. ポートや moOde の IP を指定して起動
+python voice_bot.py --moode-ip 192.168.68.198 --port 8000
+
+# 3. マイクなし環境 / Web Chat のみで起動
+python voice_bot.py --no-voice
+```
+
+### 📱 ブラウザからのアクセス
+起動後、同一ネットワーク内のPCやスマートフォンのブラウザから以下にアクセスします：
+```text
+http://<Jetson-IPアドレス>:8000
+```
+
+### 💬 操作コマンド例
+- **チャット / 音声共通**:
+  - `「Jazzをかけて」` / `「ジャズを再生して」`
+  - `「落ち着いたリラックスできる曲を流して」`
+  - `「80年代の邦楽ロックをかけて」`
+  - `「ハイレゾ音源の曲を聴きたい」`
+  - `「音楽を止めて」` / `「一時停止して」`
+  - `「次の曲にして」` / `「スキップ」`
+  - `「前の曲に戻って」`
+  - `「今日はどんな天気？」` などの一般的な雑談にも回答可能
+
