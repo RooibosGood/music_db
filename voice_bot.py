@@ -9,6 +9,7 @@ import struct
 import subprocess
 import threading
 import time
+import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,7 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-# 音声系ライブラリの安全なインポート (環境による欠落対策)
+# 音声系ライブラリの安全なインポート
 try:
     import pyaudio
 except ImportError:
@@ -80,7 +81,7 @@ voice_state = {
 }
 
 
-# ==================== HTTP ヘルパー (標準ライブラリ利用) ====================
+# ==================== HTTP ヘルパー ====================
 def http_post_json(url: str, data: Dict[str, Any], timeout: float = 30.0) -> Dict[str, Any]:
     """JSONペイロードをPOSTしてJSONレスポンスを返す"""
     json_bytes = json.dumps(data).encode("utf-8")
@@ -95,39 +96,12 @@ def http_post_json(url: str, data: Dict[str, Any], timeout: float = 30.0) -> Dic
 
 
 # ==================== SQLite DB ヘルパー ====================
-def query_db_tracks(keyword: str, limit: int = 10) -> List[Dict[str, Any]]:
-    """music_meta.db からジャンル・タイトル・アーティスト・ムード等で曲を検索"""
-    if not os.path.exists(DB_PATH):
-        return []
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        param = f"%{keyword}%"
-        cur.execute(
-            """
-            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
-            FROM tracks
-            WHERE genre LIKE ? OR mood LIKE ? OR title LIKE ? OR artist LIKE ? OR description LIKE ?
-            ORDER BY RANDOM()
-            LIMIT ?;
-        """,
-            (param, param, param, param, param, limit),
-        )
-        rows = [dict(r) for r in cur.fetchall()]
-        conn.close()
-        return rows
-    except Exception as e:
-        print(f"⚠️ DB検索エラー: {e}")
-        return []
-
-
 def find_track_metadata(
     file_path: Optional[str] = None,
     title: Optional[str] = None,
     artist: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """music_meta.db からファイルパスやタイトル・アーティスト名で楽曲情報・解説文を取得"""
+    """music_meta.db からファイル名やタイトル・アーティスト名で楽曲情報・解説文を取得"""
     if not os.path.exists(DB_PATH):
         return None
     try:
@@ -135,7 +109,7 @@ def find_track_metadata(
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
-        # 1. ファイル名/相対パスで完全一致または部分一致検索
+        # 1. ファイル名で検索
         if file_path:
             norm_path = file_path.replace("\\", "/")
             fname = norm_path.split("/")[-1]
@@ -143,10 +117,10 @@ def find_track_metadata(
                 """
                 SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
                 FROM tracks
-                WHERE relative_path = ? OR file_path LIKE ? OR relative_path LIKE ?
+                WHERE file_path LIKE ? OR relative_path LIKE ? OR relative_path = ?
                 LIMIT 1;
             """,
-                (norm_path, f"%{fname}", f"%{fname}"),
+                (f"%{fname}", f"%{fname}", norm_path),
             )
             row = cur.fetchone()
             if row:
@@ -223,7 +197,6 @@ def get_moode_status() -> Dict[str, Any]:
         client.close()
         client.disconnect()
 
-        # ハイレゾ情報の判定（サンプリングレート・ビット数）
         audio_format = status.get("audio", "")
         sample_rate = ""
         bit_depth = ""
@@ -238,7 +211,6 @@ def get_moode_status() -> Dict[str, Any]:
         song_artist = song.get("artist") or "アーティスト未設定"
         song_album = song.get("album") or "moOde Audio Library"
 
-        # DBから詳細・解説文 (description) を補完
         db_meta = find_track_metadata(file_path=song_file, title=song_title, artist=song_artist)
         description = db_meta.get("description", "") if db_meta else ""
 
@@ -303,81 +275,84 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             client.clear()
             search_results = []
 
-            # 1. まず SQLite DB (music_meta.db) から検索
-            db_tracks = query_db_tracks(query, limit=10)
-            if db_tracks:
-                for track in db_tracks:
-                    rel = track.get("relative_path")
-                    if rel:
-                        search_results.append({
-                            "file": rel,
-                            "title": track.get("title"),
-                            "artist": track.get("artist"),
-                            "description": track.get("description", ""),
-                        })
+            # 1. moOde MPD ライブラリ内の直接検索 (確実なファイルパスを取得)
+            genre_map = {
+                "ジャズ": "Jazz", "jazz": "Jazz", "JAZZ": "Jazz",
+                "ロック": "Rock", "rock": "Rock",
+                "ポップ": "Pop", "ポップス": "Pop",
+                "クラシック": "Classical",
+                "ブルース": "Blues",
+            }
+            genre_query = genre_map.get(query, query)
 
-            # 2. DBで見つからない、またはMPDで直接検索する場合
+            print(f"🔍 [moOde] MPD 検索中: genre='{genre_query}' または any='{query}'", flush=True)
+            try:
+                search_results = client.search("genre", genre_query)
+            except Exception:
+                search_results = []
+
+            if not search_results and genre_query != query:
+                try:
+                    search_results = client.search("genre", query)
+                except Exception:
+                    pass
+
             if not search_results:
-                genre_map = {
-                    "ジャズ": "Jazz", "jazz": "Jazz", "JAZZ": "Jazz",
-                    "ロック": "Rock", "rock": "Rock",
-                    "ポップ": "Pop", "ポップス": "Pop",
-                    "クラシック": "Classical",
-                    "ブルース": "Blues",
-                }
-                genre_query = genre_map.get(query, query)
+                try:
+                    search_results = client.search("any", query)
+                except Exception:
+                    pass
 
-                mpd_res = client.search("genre", genre_query)
-                if not mpd_res and genre_query != query:
-                    mpd_res = client.search("genre", query)
-                if not mpd_res:
-                    mpd_res = client.search("any", query)
-                if mpd_res:
-                    for s in mpd_res[:10]:
-                        s_file = s.get("file", "")
-                        s_title = s.get("title", s_file.split("/")[-1])
-                        s_artist = s.get("artist", "")
-                        # DBから解説文を取得
-                        db_meta = find_track_metadata(file_path=s_file, title=s_title, artist=s_artist)
-                        s_desc = db_meta.get("description", "") if db_meta else ""
-                        search_results.append({
-                            "file": s_file,
-                            "title": s_title,
-                            "artist": s_artist,
-                            "description": s_desc,
-                        })
+            if not search_results:
+                # 検索クエリを分割してあいまい検索
+                words = query.split()
+                if words:
+                    try:
+                        search_results = client.search("any", words[0])
+                    except Exception:
+                        pass
 
             if search_results:
                 added_count = 0
-                for song in search_results:
+                for song in search_results[:15]:
+                    song_file = song.get("file")
+                    if not song_file:
+                        continue
                     try:
-                        client.add(song["file"])
-                        result["tracks_added"].append(song.get("title") or song["file"])
+                        client.add(song_file)
+                        title = song.get("title") or song_file.split("/")[-1]
+                        result["tracks_added"].append(title)
                         added_count += 1
-                    except Exception:
-                        fname = song["file"].split("/")[-1]
-                        fallback_find = client.search("filename", fname)
-                        if fallback_find:
-                            client.add(fallback_find[0]["file"])
-                            result["tracks_added"].append(fallback_find[0].get("title") or fname)
-                            added_count += 1
+                    except Exception as add_err:
+                        print(f"⚠️ [moOde] client.add('{song_file}') エラー: {add_err}")
 
-                client.play()
-                result["success"] = True
+                if added_count > 0:
+                    client.play()
+                    result["success"] = True
 
-                # 1曲目のメタデータとdescriptionをセット
-                first_track = search_results[0]
-                result["track_info"] = {
-                    "title": first_track.get("title"),
-                    "artist": first_track.get("artist"),
-                    "file": first_track.get("file"),
-                }
-                result["description"] = first_track.get("description", "")
+                    # 1曲目のメタデータと DB からの description 取得
+                    first_song = search_results[0]
+                    first_file = first_song.get("file", "")
+                    first_title = first_song.get("title") or first_file.split("/")[-1]
+                    first_artist = first_song.get("artist") or "アーティスト未設定"
 
-                result["message"] = f"「{query}」に該当する楽曲 ({added_count}曲) を再生開始しました。"
-                print(f"🎵 [moOde] '{query}' の再生を開始しました ({added_count}曲 追加)", flush=True)
-                if result["description"]:
-                    print(f"📖 [Description] {result['description']}", flush=True)
+                    # DBから解説文を検索
+                    db_meta = find_track_metadata(file_path=first_file, title=first_title, artist=first_artist)
+                    description = db_meta.get("description", "") if db_meta else ""
+
+                    result["track_info"] = {
+                        "title": first_title,
+                        "artist": first_artist,
+                        "file": first_file,
+                    }
+                    result["description"] = description
+                    result["message"] = f"「{query}」に該当する楽曲 ({added_count}曲) を再生開始しました。"
+                    print(f"🎵 [moOde] '{query}' の再生を開始しました ({added_count}曲 追加)", flush=True)
+                    if description:
+                        print(f"📖 [Description] {description}", flush=True)
+                else:
+                    result["message"] = "楽曲の追加に失敗しました。"
+                    print("⚠️ [moOde] 楽曲を追加できませんでした。", flush=True)
             else:
                 result["message"] = f"「{query}」に該当する曲がライブラリに見つかりませんでした。"
                 print(f"⚠️ [moOde] '{query}' に該当する曲が見つかりません", flush=True)
@@ -412,6 +387,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
         client.disconnect()
     except Exception as e:
         print(f"❌ moOde 操作エラー: {e}")
+        traceback.print_exc()
         result["message"] = f"moOde 操作エラー: {e}"
 
     return result
@@ -419,18 +395,20 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
 
 # ==================== 音声合成 & 出力 (VOICEVOX) ====================
 def speak(text: str):
-    """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力 (ALSA排他制御付き)"""
+    """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力"""
     if not text:
         return
     with voice_lock:
         is_speaking_event.set()
         started_at = time.monotonic()
-        print(f"🔊 [VOICEVOX] 読み上げ開始: {text}", flush=True)
+        print(f"🔊 [VOICEVOX] 読み上げ開始: '{text}'", flush=True)
+        temp_wav = "/tmp/voice_reply.wav" if os.name != "nt" else os.path.join(os.environ.get("TEMP", "."), "voice_reply.wav")
         try:
             # 1. audio_query
-            query_url = f"{VOICEVOX_URL}/audio_query?text={urllib.parse.quote(text)}&speaker={SPEAKER_ID}"
-            req_q = urllib.request.Request(query_url, method="POST")
-            with urllib.request.urlopen(req_q, timeout=10) as res_q:
+            encoded_text = urllib.parse.quote(text)
+            query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={SPEAKER_ID}"
+            req_q = urllib.request.Request(query_url, data=b"", headers={"User-Agent": "moOde-AI/1.0"}, method="POST")
+            with urllib.request.urlopen(req_q, timeout=15) as res_q:
                 query_data = res_q.read()
 
             # 2. synthesis
@@ -438,13 +416,13 @@ def speak(text: str):
             req_s = urllib.request.Request(
                 synth_url,
                 data=query_data,
-                headers={"Content-Type": "application/json"},
+                headers={"Content-Type": "application/json", "User-Agent": "moOde-AI/1.0"},
                 method="POST",
             )
-            with urllib.request.urlopen(req_s, timeout=20) as res_s:
+            with urllib.request.urlopen(req_s, timeout=25) as res_s:
                 wav_bytes = res_s.read()
 
-            temp_wav = "/tmp/voice_reply.wav" if os.name != "nt" else os.path.join(os.environ.get("TEMP", "."), "voice_reply.wav")
+            # 3. wavファイル生成（先頭に無音パディングを付加して音切れ防止）
             with wave.open(io.BytesIO(wav_bytes), "rb") as source_wav:
                 with wave.open(temp_wav, "wb") as output_wav:
                     output_wav.setparams(source_wav.getparams())
@@ -454,19 +432,15 @@ def speak(text: str):
                     )
                     output_wav.writeframes(source_wav.readframes(source_wav.getnframes()))
 
+            # 4. aplay による再生
             if os.name != "nt":
-                played = False
-                dev_candidates = [AUDIO_OUTPUT_DEV, "default", "sysdefault"]
-                for dev in dev_candidates:
-                    try:
-                        res = subprocess.run(["aplay", "-D", dev, "-q", temp_wav], capture_output=True, timeout=15)
-                        if res.returncode == 0:
-                            played = True
-                            break
-                    except Exception:
-                        continue
-                if not played:
-                    subprocess.run(["aplay", "-q", temp_wav], check=False)
+                # 指定デバイス (plughw:0,0) で再生を試みる
+                print(f"🔊 [aplay] 再生中 ({AUDIO_OUTPUT_DEV})...", flush=True)
+                aplay_res = subprocess.run(["aplay", "-D", AUDIO_OUTPUT_DEV, "-q", temp_wav], capture_output=True)
+                if aplay_res.returncode != 0:
+                    print(f"⚠️ [aplay] -D {AUDIO_OUTPUT_DEV} 失敗 (code {aplay_res.returncode}): {aplay_res.stderr.decode('utf-8', errors='ignore')}")
+                    print("🔊 [aplay] デフォルトデバイス (default) で再試行中...", flush=True)
+                    subprocess.run(["aplay", "-D", "default", "-q", temp_wav], check=False)
             else:
                 try:
                     import winsound
@@ -474,13 +448,19 @@ def speak(text: str):
                 except Exception:
                     pass
 
-            if os.path.exists(temp_wav):
-                os.remove(temp_wav)
-
             print(f"🔊 [VOICEVOX] 音声出力完了（{time.monotonic() - started_at:.1f}秒）", flush=True)
+        except urllib.error.URLError as url_err:
+            print(f"❌ [VOICEVOX] 接続エラー ({VOICEVOX_URL}): {url_err}")
+            print("💡 VOICEVOX (ポート 50021) が Jetson 上で起動しているか確認してください。")
         except Exception as e:
-            print(f"⚠️ [VOICEVOX] 発話スキップ: {e}")
+            print(f"❌ [VOICEVOX] 発話処理エラー: {e}")
+            traceback.print_exc()
         finally:
+            if os.path.exists(temp_wav):
+                try:
+                    os.remove(temp_wav)
+                except Exception:
+                    pass
             is_speaking_event.clear()
 
 
