@@ -537,6 +537,33 @@ def detect_alsa_output_device(target_name: str = "Sennheiser") -> str:
     return "default"
 
 
+def clean_text_for_speech(text: str, max_chars: int = 120) -> str:
+    """VOICEVOX 読み上げ用にテキストを整形・短縮（自然な1〜2文を抽出）"""
+    if not text:
+        return ""
+    # 特殊記号や重複括弧の除去
+    t = text.replace("《", "").replace("》", "").replace("『", "「").replace("』", "」")
+    t = re.sub(r"[【】\[\]\(\)]", " ", t)
+    # 先頭の不自然なゴミ文字（「S「〜や数字等）をクリーンアップ
+    t = re.sub(r"^「[A-Za-z0-9]「", "「", t)
+    t = re.sub(r"^1(\d{3}年代)", r"\1", t)
+    
+    # 句点または読点で文を分割
+    sentences = re.split(r"(?<=[。！？!?])", t)
+    result = ""
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if len(result) + len(s) <= max_chars:
+            result += s
+        else:
+            if not result:
+                result = s[:max_chars] + "。"
+            break
+    return result or t[:max_chars]
+
+
 def speak(text: str):
     """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力"""
     global AUDIO_OUTPUT_DEV
@@ -548,14 +575,14 @@ def speak(text: str):
         print(f"🔊 [VOICEVOX] 読み上げ開始: '{text}'", flush=True)
         temp_wav = "/tmp/voice_reply.wav" if os.name != "nt" else os.path.join(os.environ.get("TEMP", "."), "voice_reply.wav")
         try:
-            # 1. audio_query
+            # 1. audio_query (タイムアウトを十分に確保)
             encoded_text = urllib.parse.quote(text)
             query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={SPEAKER_ID}"
             req_q = urllib.request.Request(query_url, data=b"", headers={"User-Agent": "moOde-AI/1.0"}, method="POST")
-            with urllib.request.urlopen(req_q, timeout=15) as res_q:
+            with urllib.request.urlopen(req_q, timeout=30) as res_q:
                 query_data = res_q.read()
 
-            # 2. synthesis
+            # 2. synthesis (長文でも耐えられるよう timeout=60 に設定)
             synth_url = f"{VOICEVOX_URL}/synthesis?speaker={SPEAKER_ID}"
             req_s = urllib.request.Request(
                 synth_url,
@@ -563,7 +590,7 @@ def speak(text: str):
                 headers={"Content-Type": "application/json", "User-Agent": "moOde-AI/1.0"},
                 method="POST",
             )
-            with urllib.request.urlopen(req_s, timeout=25) as res_s:
+            with urllib.request.urlopen(req_s, timeout=60) as res_s:
                 wav_bytes = res_s.read()
 
             # 3. wavファイル生成（先頭に無音パディングを付加して音切れ防止）
@@ -716,21 +743,23 @@ def process_user_message(
 
     # 3. 再生時、DBに description が存在すれば返答・音声読み上げ文に組み込む
     if cmd.get("action") == "play_search" and control_res.get("success"):
-        t_title = track_info.get("title")
+        t_title = track_info.get("title") or "楽曲"
         t_artist = track_info.get("artist")
 
-        if description:
-            if t_title and t_artist and t_artist != "アーティスト未設定":
-                reply_text = f"『{t_title}』（{t_artist}）を再生します。{description}"
-            elif t_title:
-                reply_text = f"『{t_title}』を再生します。{description}"
+        clean_desc = clean_text_for_speech(description, max_chars=100)
+
+        if clean_desc:
+            if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                reply_text = f"『{t_title}』（{t_artist}）を再生します。{clean_desc}"
             else:
-                reply_text = f"音楽を再生します。{description}"
+                reply_text = f"『{t_title}』を再生します。{clean_desc}"
         else:
-            if t_title and t_artist and t_artist != "アーティスト未設定":
+            if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
                 reply_text = f"『{t_title}』（{t_artist}）を再生します。"
-            elif t_title:
+            else:
                 reply_text = f"『{t_title}』を再生します。"
+
+        print(f"📖 [音声案内テキスト] {reply_text}", flush=True)
 
     # 4. 音声読み上げ (VOICEVOX) と moOde 音楽再生の順序制御（解説文を話し終えてから再生）
     needs_playback = control_res.get("needs_playback", False)
