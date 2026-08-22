@@ -75,7 +75,8 @@ is_speaking_event = threading.Event()
 stt_model = None
 chat_history: List[Dict[str, Any]] = []
 active_websockets: List[WebSocket] = []
-last_announced_file: Optional[str] = None  # 二重曲紹介防止用
+last_announced_file: Optional[str] = None  # 二重曲紹介防止用 (MPD file)
+last_announced_songid: Optional[str] = None  # 二重曲紹介防止用 (MPD songid)
 recent_played_track_ids: List[int] = []  # ランダム選曲の重複防止用
 voice_state = {
     "is_listening": False,
@@ -83,6 +84,23 @@ voice_state = {
     "last_text": "",
     "error": None,
 }
+
+
+def is_same_track(file_a: Optional[str], file_b: Optional[str], id_a: Optional[str] = None, id_b: Optional[str] = None) -> bool:
+    """2つのトラック情報が同一曲かどうかを判定（MPD ID、フルパス、相対パス、ファイル名で比較）"""
+    if id_a and id_b and str(id_a).strip() == str(id_b).strip() and str(id_a).strip() != "":
+        return True
+    if not file_a or not file_b:
+        return False
+    norm_a = file_a.replace("\\", "/").rstrip("/")
+    norm_b = file_b.replace("\\", "/").rstrip("/")
+    if norm_a == norm_b:
+        return True
+    if norm_a.endswith(norm_b) or norm_b.endswith(norm_a):
+        return True
+    base_a = norm_a.split("/")[-1]
+    base_b = norm_b.split("/")[-1]
+    return base_a == base_b and base_a != ""
 
 
 # ==================== HTTP ヘルパー ====================
@@ -456,7 +474,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
         result["message"] = f"moOde ({MOODE_IP}) に接続できませんでした。"
         return result
 
-    global last_announced_file
+    global last_announced_file, last_announced_songid
     try:
         if action == "play_search":
             client.clear()
@@ -476,21 +494,28 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 first_file = first_track.get("relative_path", "")
                 description = first_track.get("description", "")
 
-                # 1曲目の二重曲紹介を防止するため記録
-                last_announced_file = first_file
+                # MPD のプレイリスト先頭情報を取得して同期（監視ループでの誤検知・自己曲紹介を防止）
+                playlist_items = client.playlistinfo()
+                if playlist_items:
+                    first_mpd = playlist_items[0]
+                    last_announced_file = first_mpd.get("file", first_file)
+                    last_announced_songid = first_mpd.get("id", "")
+                else:
+                    last_announced_file = first_file
+                    last_announced_songid = ""
 
                 result["tracks_added"] = [t.get("title", "") for t in added_tracks]
                 result["track_info"] = {
                     "title": first_title,
                     "artist": first_artist,
-                    "file": first_file,
+                    "file": last_announced_file,
                 }
                 result["description"] = description
                 result["success"] = True
                 result["needs_playback"] = True
                 result["message"] = f"「{query}」に該当する楽曲 ({len(db_tracks)}曲) をセットしました。"
 
-                print(f"🎵 [moOde] '{query}' の楽曲をセットしました ({added_count}曲 キュー追加)", flush=True)
+                print(f"🎵 [moOde] '{query}' の楽曲をセットしました ({added_count}曲 キュー追加, 先頭={last_announced_file})", flush=True)
                 if description:
                     print(f"📖 [Description 取得成功] {description}", flush=True)
                 else:
@@ -523,6 +548,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             new_song = client.currentsong()
             new_file = new_song.get("file", "")
             last_announced_file = new_file
+            last_announced_songid = new_song.get("id", "")
 
             # 解説文読み上げのために一旦一時停止
             client.pause(1)
@@ -1195,7 +1221,7 @@ def command_after_wake_word(text: str) -> Optional[str]:
 # ==================== 自動トラック監視 & 曲紹介ループ ====================
 def run_track_watcher_loop():
     """moOde の再生進行を監視し、2曲目以降のトラック切り替わり時に自動で曲紹介を読み上げるスレッド"""
-    global last_announced_file
+    global last_announced_file, last_announced_songid
     time.sleep(3.0)  # 起動初期化待ち
     print("🎧 [Watcher] トラック変更監視ループを開始しました。(2曲目以降の自動解説)", flush=True)
 
@@ -1213,6 +1239,7 @@ def run_track_watcher_loop():
             play_state = status_data.get("state")
             song = status_data.get("song") or {}
             cur_file = song.get("file")
+            cur_id = song.get("id")
 
             if not cur_file or play_state != "play":
                 continue
@@ -1220,70 +1247,75 @@ def run_track_watcher_loop():
             # 初回起動直後など、まだ何も記録されていない場合は記録のみ
             if last_announced_file is None:
                 last_announced_file = cur_file
+                last_announced_songid = cur_id
                 continue
 
-            # トラックが切り替わったことを検出！
-            if cur_file != last_announced_file:
-                print(f"\n🔄 [Watcher] トラック切り替わり検知: {cur_file}", flush=True)
-                last_announced_file = cur_file
+            # 同一曲判定（MPD ID または パス末尾/ファイル名が一致していれば同一曲とみなしスキップ）
+            if is_same_track(cur_file, last_announced_file, cur_id, last_announced_songid):
+                continue
 
-                # 1. 音楽を一旦一時停止して、曲紹介を発話
-                mpd_client = get_mpd_client()
-                if mpd_client:
-                    try:
-                        mpd_client.pause(1)
-                        mpd_client.close()
-                        mpd_client.disconnect()
-                    except Exception:
-                        pass
+            # トラックが実際に切り替わったことを検出！
+            print(f"\n🔄 [Watcher] トラック切り替わり検知: {cur_file} (前曲={last_announced_file})", flush=True)
+            last_announced_file = cur_file
+            last_announced_songid = cur_id
 
-                # 2. 曲情報と解説文を取得
-                t_title = song.get("title") or "楽曲"
-                t_artist = song.get("artist")
-                db_meta = find_track_metadata(file_path=cur_file, title=t_title, artist=t_artist)
-                description = db_meta.get("description", "") if db_meta else ""
-                clean_desc = clean_text_for_speech(description, max_chars=100)
+            # 1. 音楽を一旦一時停止して、曲紹介を発話
+            mpd_client = get_mpd_client()
+            if mpd_client:
+                try:
+                    mpd_client.pause(1)
+                    mpd_client.close()
+                    mpd_client.disconnect()
+                except Exception:
+                    pass
 
-                if clean_desc:
-                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                        announce_text = f"続いては、『{t_title}』、{t_artist}です。{clean_desc}"
-                    else:
-                        announce_text = f"続いては、『{t_title}』です。{clean_desc}"
+            # 2. 曲情報と解説文を取得
+            t_title = song.get("title") or "楽曲"
+            t_artist = song.get("artist")
+            db_meta = find_track_metadata(file_path=cur_file, title=t_title, artist=t_artist)
+            description = db_meta.get("description", "") if db_meta else ""
+            clean_desc = clean_text_for_speech(description, max_chars=100)
+
+            if clean_desc:
+                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                    announce_text = f"続いては、『{t_title}』、{t_artist}です。{clean_desc}"
                 else:
-                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                        announce_text = f"続いては、『{t_title}』、{t_artist}をお送りします。"
-                    else:
-                        announce_text = f"続いては、『{t_title}』をお送りします。"
+                    announce_text = f"続いては、『{t_title}』です。{clean_desc}"
+            else:
+                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
+                    announce_text = f"続いては、『{t_title}』、{t_artist}をお送りします。"
+                else:
+                    announce_text = f"続いては、『{t_title}』をお送りします。"
 
-                print(f"📖 [Watcher 自動曲紹介] {announce_text}", flush=True)
+            print(f"📖 [Watcher 自動曲紹介] {announce_text}", flush=True)
 
-                # チャット履歴・Web UI にもプッシュ
-                msg_record = {
-                    "sender": "assistant",
-                    "text": announce_text,
-                    "source": "auto_announcer",
-                    "action": "track_transition",
-                    "track_info": song,
-                    "description": description,
-                    "timestamp": time.strftime("%H:%M:%S"),
-                }
-                chat_history.append(msg_record)
-                broadcast_event({"type": "chat_message", "message": msg_record})
+            # チャット履歴・Web UI にもプッシュ
+            msg_record = {
+                "sender": "assistant",
+                "text": announce_text,
+                "source": "auto_announcer",
+                "action": "track_transition",
+                "track_info": song,
+                "description": description,
+                "timestamp": time.strftime("%H:%M:%S"),
+            }
+            chat_history.append(msg_record)
+            broadcast_event({"type": "chat_message", "message": msg_record})
 
-                # 3. 発話を実行（排他ロックで安全に発話）
-                speak(announce_text)
+            # 3. 発話を実行（排他ロックで安全に発話）
+            speak(announce_text)
 
-                # 4. 発話完了後に音楽再生を再開
-                mpd_client = get_mpd_client()
-                if mpd_client:
-                    try:
-                        mpd_client.play()
-                        mpd_client.close()
-                        mpd_client.disconnect()
-                        print("▶️ [moOde] 2曲目の曲紹介完了後に音楽再生を再開しました。", flush=True)
-                        broadcast_status()
-                    except Exception as e:
-                        print(f"⚠️ [moOde] 再生再開エラー: {e}")
+            # 4. 発話完了後に音楽再生を再開
+            mpd_client = get_mpd_client()
+            if mpd_client:
+                try:
+                    mpd_client.play()
+                    mpd_client.close()
+                    mpd_client.disconnect()
+                    print("▶️ [moOde] 2曲目の曲紹介完了後に音楽再生を再開しました。", flush=True)
+                    broadcast_status()
+                except Exception as e:
+                    print(f"⚠️ [moOde] 再生再開エラー: {e}")
 
         except Exception as e:
             time.sleep(2.0)
