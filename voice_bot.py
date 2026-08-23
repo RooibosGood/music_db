@@ -48,7 +48,7 @@ MOODE_PORT = 6600
 VOICEVOX_URL = "http://localhost:50021"
 OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
 SPEAKER_ID = 13  # 青山龍星（落ち着いた男性音声）
-LLM_MODEL = "qwen3.5:2b"
+LLM_MODEL = "qwen2.5:1.5b"
 ANNOUNCE_LANGUAGE = "en"  # 曲紹介の言語: "en" (英語DJモード) または "ja" (日本語)
 ENGLISH_VOICE = "en-US-ChristopherNeural"  # 英語ラジオDJ風ニューラル音声 (edge-tts)
 AUDIO_OUTPUT_NAME = "Sennheiser"  # 再生デバイス名（部分一致で自動検索）
@@ -1763,7 +1763,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
 # ==================== メイン実行 ====================
 def main():
-    global MOODE_IP, MOODE_PORT, AUDIO_OUTPUT_DEV, ANNOUNCE_LANGUAGE
+    global MOODE_IP, MOODE_PORT, AUDIO_OUTPUT_DEV, ANNOUNCE_LANGUAGE, LLM_MODEL
 
     parser = argparse.ArgumentParser(
         description="moOde AI Master (Voice & Web Chat Assistant with DJ Announcements)",
@@ -1771,6 +1771,7 @@ def main():
     )
     parser.add_argument("--moode-ip", type=str, default=MOODE_IP, help="moOde (MPD) IP address (default: 192.168.68.198)")
     parser.add_argument("--moode-port", type=int, default=MOODE_PORT, help="moOde (MPD) port (default: 6600)")
+    parser.add_argument("--model", "--llm-model", type=str, default=LLM_MODEL, help=f"Ollama LLM model name (default: {LLM_MODEL})")
     parser.add_argument("--audio-dev", type=str, default=None, help="Audio output ALSA device (e.g. plughw:1,0, default)")
     parser.add_argument(
         "--lang", "-l",
@@ -1795,6 +1796,7 @@ def main():
 
     MOODE_IP = args.moode_ip
     MOODE_PORT = args.moode_port
+    LLM_MODEL = args.model
 
     # 言語モードの判定
     if args.ja:
@@ -1822,6 +1824,7 @@ def main():
     print("=" * 70)
     print(" 🎵 moOde AI Master (Voice & Web Chat Assistant)")
     print(f" 📡 moOde IP   : {MOODE_IP}:{MOODE_PORT}")
+    print(f" 🤖 LLM モデル : {LLM_MODEL} (Ollama)")
     print(f" 🔊 音声出力   : {AUDIO_OUTPUT_DEV}")
     print(f" {lang_banner}")
     print(f" 🌐 Web UI     : http://{args.host}:{args.port} (ブラウザでアクセス)")

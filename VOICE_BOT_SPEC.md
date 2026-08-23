@@ -16,7 +16,7 @@
   - PCやスマートフォンのWebブラウザからアクセス可能なグラスモフィズムUIを提供。
 - **完全ローカル / 高速エッジ処理**:
   - 音声認識: **faster-whisper**（Smallモデル / CPU int8）
-  - 意図抽出・対話: **Ollama (Qwen 2.5/3.5 2B)**
+  - 意図抽出・対話: **Ollama (Qwen 2.5 1.5B)**
   - 音声合成: **VOICEVOX**（キャラクター: 青山龍星）
 - **メタデータ連携 (RAG / 解説文読み上げ)**:
   - SQLiteデータベース（`music_meta.db`）から楽曲の背景・歴史・エピソード（`description`）を検索し、選曲時に自動で解説を読み上げ。
@@ -46,7 +46,7 @@ flowchart TB
         end
 
         subgraph Core Engine ["Core Processing Engine (process_user_message)"]
-            LLM_PARSER["Ollama (LLM)<br/>意図解析 / JSON Mode<br/>(qwen3.5:2b)"]
+            LLM_PARSER["Ollama (LLM)<br/>意図解析 / JSON Mode<br/>(qwen2.5:1.5b)"]
             FALLBACK["ルールベース判定<br/>(フォールバック)"]
             DISPATCHER["moOde コントローラ<br/>(control_moode)"]
         end
@@ -100,7 +100,7 @@ flowchart TB
 - **OS**: Ubuntu 22.04 LTS (JetPack 6.x) または Linux / Windows（開発用）
 - **Python**: 3.10 以上
 - **外部サービス・サーバー**:
-  - **Ollama**: `http://localhost:11434` (モデル: `qwen3.5:2b` または指定モデル)
+  - **Ollama**: `http://localhost:11434` (モデル: `qwen2.5:1.5b` または指定モデル)
   - **VOICEVOX Engine**: `http://localhost:50021` (話者ID: `13` 青山龍星)
   - **moOde audio (MPD)**: `192.168.68.198:6600` (設定変更可能)
 
@@ -129,7 +129,7 @@ pydantic>=2.0.0
 | `VOICEVOX_URL` | `"http://localhost:50021"` | VOICEVOX サーバーのエンドポイント |
 | `OLLAMA_CHAT_URL` | `"http://localhost:11434/api/chat"` | Ollama チャット API エンドポイント |
 | `SPEAKER_ID` | `13` | VOICEVOX 話者ID（青山龍星） |
-| `LLM_MODEL` | `"qwen3.5:2b"` | Ollama で使用する LLM モデル名 |
+| `LLM_MODEL` | `"qwen2.5:1.5b"` | Ollama で使用する LLM モデル名 |
 | `AUDIO_OUTPUT_NAME` | `"Sennheiser"` | 自動検出対象の音声出力デバイス名（部分一致） |
 | `AUDIO_OUTPUT_DEV` | `None`（自動検出） | 音声出力先 ALSA デバイス名（`plughw:1,0`、`default` 等） |
 | `INPUT_DEVICE_NAME` | `"Sennheiser SP 20"` | マイク入力デバイス名（部分一致） |
@@ -206,7 +206,7 @@ Ollama の JSON Mode を利用し、ユーザーの自然言語発話から構�
 #### Ollama リクエストパラメータ
 ```json
 {
-  "model": "qwen3.5:2b",
+  "model": "qwen2.5:1.5b",
   "messages": [...],
   "stream": false,
   "format": "json",
@@ -233,7 +233,7 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 - **英語DJナレーション生成 (`build_english_track_announcement`)**:
   - データベース（`music_meta.db`）の **`description_en`（英語解説文）を直接結合**して流暢な英語曲紹介文を生成します。
   - タイトル、アーティスト、および `description_en` を組み合わせたFMラジオDJスタイル（例: `Now playing: 'White Room' by Cream. 'White Room' is a psychedelic rock classic...` / 次曲: `Next up is '...' by ...` / スキップ: `Skipping to '...' by ...`）。
-  - `description_en` が未設定の場合は、ローカルLLM（Ollama `qwen3.5:2b`）による英語要約またはジャンル・ムードに基づく英語テンプレートで自動補完。
+  - `description_en` が未設定の場合は、ローカルLLM（Ollama `qwen2.5:1.5b`）による英語要約またはジャンル・ムードに基づく英語テンプレートで自動補完。
 - **英語音声合成 (`speak_english`)**:
   - **edge-tts (最優先)**: `en-US-ChristopherNeural` などの超高音質ニューラル音声（FMラジオDJトーン）で再生。
   - **espeak-ng / espeak (オフライン)**: Linux軽量TTSエンジン。
@@ -483,6 +483,7 @@ stateDiagram-v2
 | `--lang` | `-l` | `string` | `en` | 曲紹介の言語指定 (`en`, `english`, `ja`, `japanese`) |
 | `--en` | `--english` | フラグ | - | **英語DJモード**で起動（`description_en` を英語音声で再生） |
 | `--ja` | `--japanese` | フラグ | - | **日本語モード**で起動（`description_ja` を VOICEVOX で再生） |
+| `--model` | `--llm-model` | `string` | `qwen2.5:1.5b` | Ollama LLM モデル名 |
 | `--moode-ip` | - | `string` | `192.168.68.198` | moOde audio (Raspberry Pi) の IP アドレス |
 | `--moode-port`| - | `int` | `6600` | moOde audio の MPD ポート番号 |
 | `--audio-dev` | - | `string` | `None`（自動検出） | 音声出力先 ALSA デバイス（例: `plughw:1,0`, `default`） |
