@@ -40,6 +40,11 @@ try:
 except ImportError:
     MPDClient = None
 
+try:
+    import edge_tts
+except ImportError:
+    edge_tts = None
+
 
 # ==================== 設定領域 ====================
 MOODE_IP = "192.168.68.198"  # moOde (Raspberry Pi 5) の IP アドレス
@@ -634,6 +639,68 @@ def detect_alsa_output_device(target_name: str = "Sennheiser") -> str:
     return "default"
 
 
+def play_wav_file(wav_path: str, target_dev: Optional[str] = None) -> bool:
+    """ALSA aplay / Windows winsound で WAV ファイルを安全・確実に再生（自動フォールバック対応）"""
+    global AUDIO_OUTPUT_DEV
+    if not os.path.exists(wav_path) or os.path.getsize(wav_path) < 100:
+        print(f"⚠️ [play_wav_file] WAVファイルが無効または空です: {wav_path}", flush=True)
+        return False
+
+    dev = target_dev or AUDIO_OUTPUT_DEV or detect_alsa_output_device(AUDIO_OUTPUT_NAME)
+    if os.name != "nt":
+        print(f"🔊 [aplay] 再生中 (デバイス: {dev}, ファイル: {wav_path})...", flush=True)
+        # 1. 指定または検出した ALSA デバイスで再生
+        res = subprocess.run(["aplay", "-D", dev, "-q", wav_path], capture_output=True)
+        if res.returncode == 0:
+            return True
+
+        err_msg = res.stderr.decode("utf-8", errors="ignore").strip()
+        print(f"⚠️ [aplay] -D {dev} 失敗 (code {res.returncode}): {err_msg}", flush=True)
+
+        # 2. デフォルトデバイス (default) で再試行
+        if dev != "default":
+            print("🔊 [aplay] default デバイスで再試行中...", flush=True)
+            res_def = subprocess.run(["aplay", "-D", "default", "-q", wav_path], capture_output=True)
+            if res_def.returncode == 0:
+                return True
+            err_def = res_def.stderr.decode("utf-8", errors="ignore").strip()
+            print(f"⚠️ [aplay] default デバイスでも失敗: {err_def}", flush=True)
+
+        # 3. 最後の手段: -D 引数なしで再生
+        print("🔊 [aplay] デバイス指定なし (aplay -q) で再生試行...", flush=True)
+        res_raw = subprocess.run(["aplay", "-q", wav_path], capture_output=True)
+        return res_raw.returncode == 0
+    else:
+        try:
+            import winsound
+            winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+            return True
+        except Exception as e:
+            print(f"⚠️ [winsound] 再生エラー: {e}", flush=True)
+            return False
+
+
+def add_silence_padding_to_wav(source_wav_path: str, output_wav_path: str, silence_sec: float = VOICE_PRE_SILENCE_SEC) -> bool:
+    """WAVファイルの先頭に無音フレームを付加してスピーカー（Sennheiser SP 20等）の頭切れ・音切れを防止"""
+    try:
+        with wave.open(source_wav_path, "rb") as source_wav:
+            params = source_wav.getparams()
+            frames = source_wav.readframes(source_wav.getnframes())
+            framerate = source_wav.getframerate()
+            nchannels = source_wav.getnchannels()
+            sampwidth = source_wav.getsampwidth()
+
+        with wave.open(output_wav_path, "wb") as output_wav:
+            output_wav.setparams(params)
+            silence_frames = int(framerate * silence_sec)
+            output_wav.writeframes(b"\0" * silence_frames * nchannels * sampwidth)
+            output_wav.writeframes(frames)
+        return True
+    except Exception as e:
+        print(f"⚠️ [WAV Padding] 無音パディング付加エラー: {e}", flush=True)
+        return False
+
+
 def clean_text_for_speech(text: str, max_chars: int = 120) -> str:
     """VOICEVOX 読み上げ用にテキストを整形・短縮（自然な1〜2文を抽出）"""
     if not text:
@@ -837,24 +904,8 @@ def speak(text: str):
                     )
                     output_wav.writeframes(source_wav.readframes(source_wav.getnframes()))
 
-            # 4. aplay による再生
-            if os.name != "nt":
-                target_dev = AUDIO_OUTPUT_DEV or detect_alsa_output_device(AUDIO_OUTPUT_NAME)
-                print(f"🔊 [aplay] 再生中 ({target_dev})...", flush=True)
-                aplay_res = subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], capture_output=True)
-                if aplay_res.returncode != 0:
-                    err_msg = aplay_res.stderr.decode('utf-8', errors='ignore').strip()
-                    print(f"⚠️ [aplay] -D {target_dev} 失敗 (code {aplay_res.returncode}): {err_msg}")
-                    if target_dev != "default":
-                        print("🔊 [aplay] デフォルトデバイス (default) で再試行中...", flush=True)
-                        subprocess.run(["aplay", "-D", "default", "-q", temp_wav], check=False)
-            else:
-                try:
-                    import winsound
-                    winsound.PlaySound(temp_wav, winsound.SND_FILENAME)
-                except Exception:
-                    pass
-
+            # 4. 音声再生
+            play_wav_file(temp_wav)
             print(f"🔊 [VOICEVOX] 音声出力完了（{time.monotonic() - started_at:.1f}秒）", flush=True)
         except urllib.error.URLError as url_err:
             print(f"❌ [VOICEVOX] 接続エラー ({VOICEVOX_URL}): {url_err}")
@@ -1006,61 +1057,79 @@ def speak_english(text: str):
     with voice_lock:
         is_speaking_event.set()
         started_at = time.monotonic()
-        print(f"🎙️ [English DJ] 英語読み上げ開始: '{text}'", flush=True)
+        print(f"\n🎙️ [English DJ] 英語読み上げ開始: '{text}'", flush=True)
 
         temp_dir = "/tmp" if os.name != "nt" else os.environ.get("TEMP", ".")
+        temp_raw_wav = os.path.join(temp_dir, "voice_reply_raw.wav")
+        temp_padded_wav = os.path.join(temp_dir, "voice_reply_en.wav")
         temp_mp3 = os.path.join(temp_dir, "voice_reply_en.mp3")
-        temp_wav = os.path.join(temp_dir, "voice_reply_en.wav")
-        target_dev = AUDIO_OUTPUT_DEV or detect_alsa_output_device(AUDIO_OUTPUT_NAME)
 
         tts_success = False
 
         # 方法1: edge-tts (最も高音質で自然な英語ラジオDJボイス)
         try:
-            cmd = [
-                "edge-tts",
-                "--voice", ENGLISH_VOICE,
-                "--text", text,
-                "--write-media", temp_mp3,
-            ]
-            res = subprocess.run(cmd, capture_output=True, timeout=10)
-            if res.returncode == 0 and os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 100:
-                if os.name != "nt":
-                    # ffmpeg で WAV 変換して aplay で再生
-                    conv_res = subprocess.run(
-                        ["ffmpeg", "-y", "-i", temp_mp3, "-ar", "48000", "-ac", "2", temp_wav],
-                        capture_output=True, timeout=5
-                    )
-                    if conv_res.returncode == 0 and os.path.exists(temp_wav):
-                        subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], check=False)
+            print(f"🎙️ [English DJ] edge-tts 音声合成を試行中... (ボイス: {ENGLISH_VOICE})", flush=True)
+            # 1-1. Python モジュールとしての edge_tts 呼び出しを試行
+            if edge_tts is not None:
+                async def _gen_edge_tts():
+                    communicate = edge_tts.Communicate(text, ENGLISH_VOICE)
+                    await communicate.save(temp_mp3)
+                try:
+                    asyncio.run(_gen_edge_tts())
+                except Exception as py_edge_err:
+                    print(f"⚠️ [edge_tts Python] 生成エラー: {py_edge_err}", flush=True)
+
+            # 1-2. CLI コマンドの edge-tts を試行（MP3が未生成の場合）
+            if not os.path.exists(temp_mp3) or os.path.getsize(temp_mp3) < 100:
+                cmd = [
+                    "edge-tts",
+                    "--voice", ENGLISH_VOICE,
+                    "--text", text,
+                    "--write-media", temp_mp3,
+                ]
+                res_cli = subprocess.run(cmd, capture_output=True, timeout=12)
+                if res_cli.returncode != 0:
+                    err = res_cli.stderr.decode("utf-8", errors="ignore").strip()
+                    print(f"⚠️ [edge-tts CLI] 失敗 (code {res_cli.returncode}): {err}", flush=True)
+
+            if os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 100:
+                print(f"📦 [English DJ] MP3生成成功 ({os.path.getsize(temp_mp3)} bytes)。WAV変換中...", flush=True)
+                # MP3 を 48kHz 16bit 2ch WAV に変換 (Sennheiser SP 20 / ALSA 最適化)
+                conv_res = subprocess.run(
+                    ["ffmpeg", "-y", "-i", temp_mp3, "-ar", "48000", "-ac", "2", "-c:a", "pcm_s16le", temp_raw_wav],
+                    capture_output=True, timeout=6
+                )
+                if conv_res.returncode == 0 and os.path.exists(temp_raw_wav):
+                    # 無音パディング付加（SP 20の頭切れ防止）
+                    add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
+                    if play_wav_file(temp_padded_wav):
                         tts_success = True
-                    else:
-                        res_mpg = subprocess.run(["mpg123", "-a", target_dev, "-q", temp_mp3], capture_output=True)
-                        if res_mpg.returncode == 0:
-                            tts_success = True
+                        print("✅ [English DJ] edge-tts 音声の再生完了", flush=True)
                 else:
-                    try:
-                        import winsound
-                        subprocess.run(["ffmpeg", "-y", "-i", temp_mp3, temp_wav], capture_output=True)
-                        if os.path.exists(temp_wav):
-                            winsound.PlaySound(temp_wav, winsound.SND_FILENAME)
+                    # ffmpeg が無い場合の mpg123 試行
+                    mpg_res = subprocess.run(["mpg123", "-w", temp_raw_wav, temp_mp3], capture_output=True)
+                    if mpg_res.returncode == 0 and os.path.exists(temp_raw_wav):
+                        add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
+                        if play_wav_file(temp_padded_wav):
                             tts_success = True
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                            print("✅ [English DJ] edge-tts (mpg123経由) 音声の再生完了", flush=True)
+        except Exception as e:
+            print(f"⚠️ [English DJ] edge-tts 処理例外: {e}", flush=True)
 
         # 方法2: espeak-ng / espeak (オフライン英語音声合成)
         if not tts_success and os.name != "nt":
             try:
+                print("🎙️ [English DJ] espeak-ng / espeak でフォールバック生成中...", flush=True)
                 for espeak_cmd in ["espeak-ng", "espeak"]:
-                    res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "145", "-w", temp_wav, text], capture_output=True)
-                    if res.returncode == 0 and os.path.exists(temp_wav):
-                        subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], check=False)
-                        tts_success = True
-                        break
-            except Exception:
-                pass
+                    res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "140", "-w", temp_raw_wav, text], capture_output=True)
+                    if res.returncode == 0 and os.path.exists(temp_raw_wav):
+                        add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
+                        if play_wav_file(temp_padded_wav):
+                            tts_success = True
+                            print(f"✅ [English DJ] {espeak_cmd} 音声の再生完了", flush=True)
+                            break
+            except Exception as e:
+                print(f"⚠️ [English DJ] espeak 処理例外: {e}", flush=True)
 
         # 方法3: Windows SAPI (Windowsローカル環境用)
         if not tts_success and os.name == "nt":
@@ -1071,32 +1140,42 @@ def speak_english(text: str):
             except Exception:
                 pass
 
-        # 方法4: VOICEVOX (フォールバック)
+        # 方法4: VOICEVOX (最終フォールバック - 英語をカタカナに変換して確実に発話)
         if not tts_success:
-            print("ℹ️ [English DJ] VOICEVOX にフォールバックします。")
+            print("⚠️ [English DJ] 英語TTSエンジンが利用できないため、VOICEVOX (カタカナ変換) にフォールバックします。", flush=True)
             try:
-                encoded_text = urllib.parse.quote(text)
+                kana_text = convert_english_to_katakana(text)
+                print(f"🔤 [English DJ] VOICEVOX 読み上げ用カタカナ: '{kana_text}'", flush=True)
+                encoded_text = urllib.parse.quote(kana_text)
                 query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={SPEAKER_ID}"
                 req_q = urllib.request.Request(query_url, data=b"", headers={"User-Agent": "moOde-AI/1.0"}, method="POST")
-                with urllib.request.urlopen(req_q, timeout=15) as res_q:
+                with urllib.request.urlopen(req_q, timeout=20) as res_q:
                     query_data = res_q.read()
                 synth_url = f"{VOICEVOX_URL}/synthesis?speaker={SPEAKER_ID}"
                 req_s = urllib.request.Request(
                     synth_url, data=query_data,
                     headers={"Content-Type": "application/json", "User-Agent": "moOde-AI/1.0"}, method="POST"
                 )
-                with urllib.request.urlopen(req_s, timeout=30) as res_s:
+                with urllib.request.urlopen(req_s, timeout=45) as res_s:
                     wav_bytes = res_s.read()
-                with open(temp_wav, "wb") as f:
-                    f.write(wav_bytes)
-                if os.name != "nt":
-                    subprocess.run(["aplay", "-D", target_dev, "-q", temp_wav], check=False)
-            except Exception:
-                pass
 
-        print(f"🎙️ [English DJ] 音声出力完了（{time.monotonic() - started_at:.1f}秒）", flush=True)
+                with wave.open(io.BytesIO(wav_bytes), "rb") as source_wav:
+                    with wave.open(temp_padded_wav, "wb") as output_wav:
+                        output_wav.setparams(source_wav.getparams())
+                        silence_frames = int(source_wav.getframerate() * VOICE_PRE_SILENCE_SEC)
+                        output_wav.writeframes(b"\0" * silence_frames * source_wav.getnchannels() * source_wav.getsampwidth())
+                        output_wav.writeframes(source_wav.readframes(source_wav.getnframes()))
 
-        for p in [temp_mp3, temp_wav]:
+                if play_wav_file(temp_padded_wav):
+                    tts_success = True
+                    print("✅ [English DJ] VOICEVOX (フォールバック) 音声の再生完了", flush=True)
+            except Exception as e:
+                print(f"❌ [English DJ] VOICEVOX フォールバックも失敗: {e}", flush=True)
+                traceback.print_exc()
+
+        print(f"🎙️ [English DJ] 音声処理サイクル終了（所要時間: {time.monotonic() - started_at:.1f}秒）\n", flush=True)
+
+        for p in [temp_mp3, temp_raw_wav, temp_padded_wav]:
             if os.path.exists(p):
                 try:
                     os.remove(p)
