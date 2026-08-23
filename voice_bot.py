@@ -1,13 +1,10 @@
 import argparse
 import asyncio
-import hashlib
 import io
 import json
 import os
-import random
 import re
 import shutil
-import sqlite3
 import struct
 import subprocess
 import sys
@@ -19,13 +16,18 @@ import urllib.parse
 import urllib.request
 import wave
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
+
+# 分割モジュール (db.py / coverart.py)
+import coverart
+from coverart import get_album_cover_bytes
+from db import add_db_tracks_to_mpd, find_track_metadata, search_tracks_from_db
 
 # 音声系ライブラリの安全なインポート
 try:
@@ -64,7 +66,7 @@ AUDIO_OUTPUT_DEV = None  # Noneの場合は自動検出、または "plughw:1,0"
 VOICE_PRE_SILENCE_SEC = 0.3  # 再生開始時の音切れ防止用
 INPUT_DEVICE_NAME = "Sennheiser SP 20"  # PyAudioの表示名に含まれる文字列
 INPUT_DEVICE_INDEX = None  # 名前で見つからない場合に使うPyAudio番号
-DB_PATH = "music_meta.db"
+# DB_PATH は db.py に移動
 
 WAKE_WORD_PATTERNS = (
     r"ヘイ[\s、,。！？!?]*マスター",
@@ -87,7 +89,7 @@ chat_history: List[Dict[str, Any]] = []
 active_websockets: List[WebSocket] = []
 last_announced_file: Optional[str] = None  # 二重曲紹介防止用 (MPD file)
 last_announced_songid: Optional[str] = None  # 二重曲紹介防止用 (MPD songid)
-recent_played_track_ids: List[int] = []  # ランダム選曲の重複防止用
+# recent_played_track_ids は db.py に移動
 voice_state = {
     "is_listening": False,
     "state": "idle",
@@ -127,487 +129,8 @@ def http_post_json(url: str, data: Dict[str, Any], timeout: float = 30.0) -> Dic
         return json.loads(resp_data)
 
 
-# ==================== SQLite DB ヘルパー ====================
-def find_track_metadata(
-    file_path: Optional[str] = None,
-    title: Optional[str] = None,
-    artist: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    """music_meta.db からファイル名やタイトル・アーティスト名で楽曲情報・解説文を取得"""
-    if not os.path.exists(DB_PATH):
-        return None
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-
-        # 1. ファイル名で検索（完全一致、末尾一致、拡張子なし一致）
-        if file_path:
-            norm_path = file_path.replace("\\", "/")
-            fname = norm_path.split("/")[-1]
-            fname_stem = os.path.splitext(fname)[0]
-
-            cur.execute(
-                """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
-                FROM tracks
-                WHERE file_path LIKE ? OR relative_path LIKE ? OR relative_path = ? OR file_path LIKE ? OR relative_path LIKE ?
-                LIMIT 1;
-            """,
-                (f"%{fname}", f"%{fname}", norm_path, f"%{fname_stem}%", f"%{fname_stem}%"),
-            )
-            row = cur.fetchone()
-            if row and (row["description_ja"] or row["description_en"]):
-                conn.close()
-                return dict(row)
-
-        # 2. タイトルとアーティストで検索
-        if title and artist and artist != "アーティスト未設定" and artist != "Unknown":
-            cur.execute(
-                """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
-                FROM tracks
-                WHERE (title LIKE ? OR ? LIKE '%' || title || '%') AND (artist LIKE ? OR ? LIKE '%' || artist || '%')
-                LIMIT 1;
-            """,
-                (f"%{title}%", title, f"%{artist}%", artist),
-            )
-            row = cur.fetchone()
-            if row and (row["description_ja"] or row["description_en"]):
-                conn.close()
-                return dict(row)
-
-        # 3. タイトルのみで検索
-        if title and title != "未選択" and title != "Unknown":
-            cur.execute(
-                """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
-                FROM tracks
-                WHERE title LIKE ? OR ? LIKE '%' || title || '%'
-                ORDER BY CASE WHEN title = ? THEN 0 ELSE 1 END
-                LIMIT 1;
-            """,
-                (f"%{title}%", title, title),
-            )
-            row = cur.fetchone()
-            if row:
-                conn.close()
-                return dict(row)
-
-        conn.close()
-    except Exception as e:
-        print(f"⚠️ DB詳細取得エラー: {e}")
-    return None
-
-
-# ==================== SQLite DB 楽曲検索 & 選曲 ====================
-def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
-    """music_meta.db からユーザー要望（ジャンル、ムード、エネルギー、ハイレゾ、アーティスト、曲名等）に合致する楽曲を完全ランダム抽出"""
-    global recent_played_track_ids
-    if not os.path.exists(DB_PATH):
-        print(f"⚠️ [DB] {DB_PATH} が存在しません。")
-        return []
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-
-        clean_q = query.strip()
-        conditions = []
-        params = []
-
-        # 直近に再生した楽曲IDは除外候補（同じ曲の連続再生を防止）
-        recent_ids = recent_played_track_ids[-30:] if recent_played_track_ids else []
-
-        # 1. ジャンル判定マッピング
-        genre_keywords = {
-            "ジャズ": "ジャズ", "jazz": "ジャズ",
-            "ロック": "ロック", "rock": "ロック",
-            "ポップ": "ポップ", "ポップス": "ポップ", "pop": "ポップ",
-            "クラシック": "クラシック", "classic": "クラシック", "classical": "クラシック",
-            "ブルース": "ブルース", "blues": "ブルース",
-            "ソウル": "R&B・ソウル", "r&b": "R&B・ソウル", "rnb": "R&B・ソウル",
-            "エレクトロニック": "エレクトロニック", "テクノ": "エレクトロニック", "edm": "エレクトロニック",
-            "フォーク": "フォーク・カントリー", "カントリー": "フォーク・カントリー",
-            "ヒップホップ": "ヒップホップ", "hiphop": "ヒップホップ", "ラップ": "ヒップホップ",
-            "サントラ": "サウンドトラック・インスト", "サウンドトラック": "サウンドトラック・インスト", "インスト": "サウンドトラック・インスト",
-        }
-
-        matched_genres = [db_genre for kw, db_genre in genre_keywords.items() if kw in clean_q.lower()]
-        if matched_genres:
-            genre_clause = " OR ".join(["genre LIKE ?" for _ in matched_genres])
-            conditions.append(f"({genre_clause})")
-            params.extend([f"%{g}%" for g in matched_genres])
-
-        # 2. ハイレゾ判定
-        if any(k in clean_q.lower() for k in ["ハイレゾ", "hires", "hi-res", "高音質"]):
-            conditions.append("is_hires = 1")
-
-        # 3. エネルギー / 気分判定
-        if any(k in clean_q for k in ["静か", "落ち着", "リラックス", "穏やか", "眠", "バラード", "癒"]):
-            conditions.append("(energy_level <= 2 OR mood LIKE '%Calm%' OR mood LIKE '%Relax%')")
-        elif any(k in clean_q for k in ["元気", "激し", "アップテンポ", "ノリ", "ドライブ", "テンション"]):
-            conditions.append("(energy_level >= 4 OR mood LIKE '%Energetic%' OR mood LIKE '%Upbeat%')")
-
-        # 4. 邦楽 / 洋楽判定
-        if any(k in clean_q for k in ["邦楽", "j-pop", "jpop", "日本の曲", "日本語"]):
-            conditions.append("music_category = '邦楽'")
-        elif any(k in clean_q for k in ["洋楽", "海外"]):
-            conditions.append("music_category = '洋楽'")
-
-        # 5. 一般キーワード（アーティスト名、曲名、アルバム名、解説文）
-        stop_words = ["をかけて", "を流して", "を再生して", "かけて", "流して", "再生して", "聴きたい", "聴かせて", "曲", "音楽"]
-        keyword_q = clean_q
-        for sw in stop_words:
-            keyword_q = keyword_q.replace(sw, "").strip()
-
-        if keyword_q and not matched_genres:
-            words = keyword_q.split()
-            kw_conditions = []
-            for w in words:
-                kw_conditions.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?)")
-                params.extend([f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%"])
-            if kw_conditions:
-                conditions.append(" AND ".join(kw_conditions))
-
-        # 直近再生した曲を除外する条件を追加（ヒット数が十分に取れる場合）
-        base_where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        
-        # まず直近再生除外 ＋ description ありの候補をランダムに50件取得
-        sql = f"""
-            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
-            FROM tracks
-            {base_where}
-            ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
-            LIMIT 50;
-        """
-        cur.execute(sql, params)
-        rows = [dict(r) for r in cur.fetchall()]
-
-        # 直近再生曲を除外したリストを作成
-        filtered_rows = [r for r in rows if r["id"] not in recent_ids]
-        candidate_rows = filtered_rows if len(filtered_rows) >= limit else rows
-
-        # ヒットしなかった場合、キーワードの部分一致でフォールバック
-        if not candidate_rows and keyword_q:
-            cur.execute(f"""
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
-                FROM tracks
-                WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?
-                ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
-                LIMIT 50;
-            """, (f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%"))
-            candidate_rows = [dict(r) for r in cur.fetchall()]
-
-        # それでもヒットしない場合、ランダムに曲を取得
-        if not candidate_rows:
-            cur.execute("""
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
-                FROM tracks
-                WHERE (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '')
-                ORDER BY RANDOM()
-                LIMIT 50;
-            """)
-            candidate_rows = [dict(r) for r in cur.fetchall()]
-
-        # Python 側でも再度シャッフルして完全なランダム性を確保
-        random.shuffle(candidate_rows)
-        selected_tracks = candidate_rows[:limit]
-
-        # 選択した曲の ID を直近再生リストに追加（最大50件保持）
-        for t in selected_tracks:
-            t_id = t.get("id")
-            if t_id and t_id not in recent_played_track_ids:
-                recent_played_track_ids.append(t_id)
-        if len(recent_played_track_ids) > 50:
-            recent_played_track_ids = recent_played_track_ids[-50:]
-
-        conn.close()
-        return selected_tracks
-    except Exception as e:
-        print(f"⚠️ [DB検索エラー]: {e}")
-        return []
-
-
-def add_db_tracks_to_mpd(client: Any, db_tracks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """DB検索結果の楽曲を MPD のキューに追加し、追加に成功した楽曲リストを返す"""
-    added_tracks = []
-    for track in db_tracks:
-        rel_path = track.get("relative_path") or ""
-        fname = rel_path.replace("\\", "/").split("/")[-1] if rel_path else ""
-        title = track.get("title") or fname
-        artist = track.get("artist") or ""
-
-        added = False
-        # 1. ファイル名で MPD 検索
-        if fname:
-            try:
-                search_res = client.search("file", fname)
-                if not search_res:
-                    search_res = client.search("any", fname)
-                if search_res:
-                    client.add(search_res[0]["file"])
-                    added_tracks.append(track)
-                    added = True
-            except Exception:
-                pass
-
-        # 2. タイトル＆アーティストで MPD 検索
-        if not added and title:
-            try:
-                if artist and artist != "アーティスト未設定" and artist != "Unknown":
-                    search_res = client.search("title", title, "artist", artist)
-                else:
-                    search_res = client.search("title", title)
-                if search_res:
-                    client.add(search_res[0]["file"])
-                    added_tracks.append(track)
-                    added = True
-            except Exception:
-                pass
-
-        # 3. 直接パスでの追加試行 (moOde の相対パス)
-        if not added and rel_path:
-            norm_rel = rel_path.replace("\\", "/")
-            try:
-                client.add(norm_rel)
-                added_tracks.append(track)
-                added = True
-            except Exception:
-                pass
-
-    return added_tracks
-
-
-# ==================== アルバムジャケット画像 (Cover Art) 取得 ====================
-cover_art_cache: Dict[str, Tuple[bytes, str]] = {}
-moode_default_cover_hash: Optional[str] = None  # moOde デフォルトジャケット画像のMD5ハッシュ
-
-
-def get_moode_default_cover_hash() -> Optional[str]:
-    """moOde の coverart.php がカバー未発見時に返すデフォルト画像のMD5ハッシュを取得（キャッシュ）
-
-    moOde の coverart.php は、カバー画像が存在しない場合でも HTTP 200 で
-    デフォルトジャケット画像を返す仕様のため、それを検出してスキップするために使用する。
-    """
-    global moode_default_cover_hash
-    if moode_default_cover_hash is not None:
-        return moode_default_cover_hash
-    if not MOODE_IP:
-        return None
-    try:
-        url = f"http://{MOODE_IP}/coverart.php?file=__nonexistent_track_for_default_probe__.xyz"
-        req = urllib.request.Request(url, headers={"User-Agent": "moOde-AI/1.0"})
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
-            if resp.status == 200:
-                data = resp.read()
-                if len(data) > 100:
-                    moode_default_cover_hash = hashlib.md5(data).hexdigest()
-                    print(f"🖼️ [Cover Art] moOde デフォルトジャケット検出 (MD5: {moode_default_cover_hash[:8]}...)", flush=True)
-    except Exception as e:
-        print(f"⚠️ [Cover Art] moOde デフォルト画像のプローブ失敗: {e}", flush=True)
-    return moode_default_cover_hash
-
-DEFAULT_COVER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
-  <defs>
-    <radialGradient id="grad" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#00f2fe" stop-opacity="0.8"/>
-      <stop offset="100%" stop-color="#4facfe" stop-opacity="0.2"/>
-    </radialGradient>
-  </defs>
-  <rect width="300" height="300" rx="16" fill="#111827"/>
-  <circle cx="150" cy="150" r="100" fill="url(#grad)"/>
-  <circle cx="150" cy="150" r="30" fill="#0f172a" stroke="#00f2fe" stroke-width="3"/>
-  <circle cx="150" cy="150" r="6" fill="#00f2fe"/>
-  <text x="150" y="270" text-anchor="middle" fill="#94a3b8" font-size="14" font-family="sans-serif">moOde Audio Player</text>
-</svg>"""
-
-
-def clean_album_or_artist_for_search(text: str) -> str:
-    """iTunes / Deezer 検索用に [Disc 1], (Remastered) などの付加文字列を除去"""
-    if not text:
-        return ""
-    t = re.sub(r"\[.*?\]", "", text)
-    t = re.sub(r"\(.*?\)", "", t)
-    t = re.sub(r"【.*?】", "", t)
-    t = re.sub(r"\b(disc|disk|cd|remaster|remastered|version|edition|vol|volume|deluxe|bonus|mono|stereo|live)\b.*$", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-
-def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = "", title: str = "") -> Tuple[bytes, str]:
-    """MPD / ローカルフォルダー / moOde Web / iTunes API / Deezer API からアルバムジャケット画像を取得"""
-    cache_key = f"{song_file}::{artist}::{album}::{title}"
-    if cache_key in cover_art_cache:
-        return cover_art_cache[cache_key]
-
-    # 0. DBからの正確なメタデータ補完
-    db_meta = find_track_metadata(file_path=song_file, title=title, artist=artist)
-    if db_meta:
-        if not artist or artist in ("アーティスト未設定", "Unknown", "unknown"):
-            artist = db_meta.get("artist") or artist
-        if not album or album in ("moOde Audio Library", "Unknown", "unknown"):
-            album = db_meta.get("album") or album
-        if not title or title in ("未選択", "Unknown", "unknown"):
-            title = db_meta.get("title") or title
-        db_file_path = db_meta.get("file_path", "")
-    else:
-        db_file_path = ""
-
-    # 1. ローカル/NASの音楽フォルダ内の画像ファイル直接探索 (cover.jpg, folder.jpg 等)
-    for target_path in [song_file, db_file_path]:
-        if target_path:
-            norm = target_path.replace("\\", "/")
-            dir_path = os.path.dirname(norm)
-            if dir_path and os.path.isdir(dir_path):
-                for img_name in ["cover.jpg", "folder.jpg", "front.jpg", "album.jpg", "artwork.jpg", "cover.png", "folder.png", "front.png"]:
-                    full_img_path = os.path.join(dir_path, img_name)
-                    if os.path.isfile(full_img_path) and os.path.getsize(full_img_path) > 1000:
-                        try:
-                            with open(full_img_path, "rb") as f:
-                                img_bytes = f.read()
-                            media_type = "image/png" if img_name.endswith(".png") else "image/jpeg"
-                            ret = (img_bytes, media_type)
-                            cover_art_cache[cache_key] = ret
-                            return ret
-                        except Exception:
-                            pass
-
-    # 2. MPD albumart / readpicture コマンド
-    if song_file and MPDClient is not None:
-        try:
-            client = get_mpd_client()
-            if client:
-                try:
-                    # 2-1. albumart
-                    res = client.albumart(song_file, 0)
-                    if isinstance(res, dict) and "binary" in res:
-                        img_data = bytearray(res["binary"])
-                        size = int(res.get("size", len(img_data)))
-                        while len(img_data) < size:
-                            chunk = client.albumart(song_file, len(img_data))
-                            if not chunk or "binary" not in chunk:
-                                break
-                            img_data.extend(chunk["binary"])
-                        if len(img_data) > 500:
-                            ret = (bytes(img_data), "image/jpeg")
-                            cover_art_cache[cache_key] = ret
-                            return ret
-                except Exception:
-                    pass
-
-                # 2-2. readpicture (ID3タグ埋め込み画像)
-                try:
-                    res = client.readpicture(song_file, 0)
-                    if isinstance(res, dict) and "binary" in res:
-                        img_data = bytearray(res["binary"])
-                        size = int(res.get("size", len(img_data)))
-                        while len(img_data) < size:
-                            chunk = client.readpicture(song_file, len(img_data))
-                            if not chunk or "binary" not in chunk:
-                                break
-                            img_data.extend(chunk["binary"])
-                        if len(img_data) > 500:
-                            ret = (bytes(img_data), "image/jpeg")
-                            cover_art_cache[cache_key] = ret
-                            return ret
-                except Exception:
-                    pass
-                finally:
-                    try:
-                        client.close()
-                        client.disconnect()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    # 3. moOde Web サーバーの coverart.php
-    if song_file and MOODE_IP:
-        try:
-            default_hash = get_moode_default_cover_hash()
-            quoted_file = urllib.parse.quote(song_file)
-            for url_fmt in [
-                f"http://{MOODE_IP}/coverart.php?file={quoted_file}",
-                f"http://{MOODE_IP}/coverart.php/{quoted_file}",
-            ]:
-                try:
-                    req = urllib.request.Request(url_fmt, headers={"User-Agent": "moOde-AI/1.0"})
-                    with urllib.request.urlopen(req, timeout=1.5) as resp:
-                        if resp.status == 200:
-                            content_type = resp.headers.get("Content-Type", "image/jpeg")
-                            img_bytes = resp.read()
-                            if len(img_bytes) > 1000 and "image" in content_type:
-                                # moOde デフォルトジャケット画像（カバー未発見時のフォールバック）ならスキップ
-                                if default_hash and hashlib.md5(img_bytes).hexdigest() == default_hash:
-                                    print("🖼️ [Cover Art] coverart.php はデフォルト画像を返却 → スキップ", flush=True)
-                                    continue
-                                ret = (img_bytes, content_type)
-                                cover_art_cache[cache_key] = ret
-                                return ret
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    # 4. iTunes Search API (クリーンアップ正規化クエリで超高画質 600x600 取得)
-    clean_art = clean_album_or_artist_for_search(artist)
-    clean_alb = clean_album_or_artist_for_search(album)
-    clean_tit = clean_album_or_artist_for_search(title)
-
-    queries = []
-    if clean_art and clean_alb and clean_art not in ("アーティスト未設定", "Unknown"):
-        queries.append(f"{clean_art} {clean_alb}")
-    if clean_art and clean_tit and clean_art not in ("アーティスト未設定", "Unknown"):
-        queries.append(f"{clean_art} {clean_tit}")
-    if clean_alb and clean_alb not in ("moOde Audio Library", "Unknown"):
-        queries.append(clean_alb)
-
-    for q in queries:
-        try:
-            itunes_url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=album&limit=1"
-            req = urllib.request.Request(itunes_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 moOde-AI/1.0"})
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
-                res_json = json.loads(resp.read().decode("utf-8"))
-                results = res_json.get("results", [])
-                if results:
-                    art_url = results[0].get("artworkUrl100", "")
-                    if art_url:
-                        hi_art_url = art_url.replace("100x100bb.jpg", "600x600bb.jpg")
-                        req_art = urllib.request.Request(hi_art_url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urllib.request.urlopen(req_art, timeout=2.5) as art_resp:
-                            img_bytes = art_resp.read()
-                            if len(img_bytes) > 500:
-                                ret = (img_bytes, "image/jpeg")
-                                cover_art_cache[cache_key] = ret
-                                return ret
-        except Exception:
-            pass
-
-    # 5. Deezer Music API (iTunes で見つからない楽曲のフォールバック)
-    for q in queries:
-        try:
-            dz_url = f"https://api.deezer.com/search?q={urllib.parse.quote(q)}&limit=1"
-            req = urllib.request.Request(dz_url, headers={"User-Agent": "Mozilla/5.0 moOde-AI/1.0"})
-            with urllib.request.urlopen(req, timeout=2.5) as resp:
-                res_json = json.loads(resp.read().decode("utf-8"))
-                data = res_json.get("data", [])
-                if data:
-                    album_info = data[0].get("album", {})
-                    cover_url = album_info.get("cover_xl") or album_info.get("cover_big") or album_info.get("cover_medium")
-                    if cover_url:
-                        req_cov = urllib.request.Request(cover_url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urllib.request.urlopen(req_cov, timeout=2.5) as cov_resp:
-                            img_bytes = cov_resp.read()
-                            if len(img_bytes) > 500:
-                                ret = (img_bytes, "image/jpeg")
-                                cover_art_cache[cache_key] = ret
-                                return ret
-        except Exception:
-            pass
-
-    # 6. デフォルト SVG
-    return (DEFAULT_COVER_SVG.encode("utf-8"), "image/svg+xml")
+# find_track_metadata / search_tracks_from_db / add_db_tracks_to_mpd は db.py に移動
+# get_album_cover_bytes など Cover Art 関連は coverart.py に移動
 
 
 # ==================== MPD (moOde) 制御 ====================
@@ -2346,6 +1869,10 @@ def main():
     MOODE_IP = args.moode_ip
     MOODE_PORT = args.moode_port
     LLM_MODEL = args.model
+
+    # 分割した coverart モジュールにも moOde 接続先を同期
+    coverart.MOODE_IP = MOODE_IP
+    coverart.MOODE_PORT = MOODE_PORT
 
     # 言語モードの判定
     if args.ja:
