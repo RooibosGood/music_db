@@ -1697,16 +1697,30 @@ def run_track_watcher_loop():
             time.sleep(2.0)
 
 
+def play_startup_greeting():
+    """起動時の初期案内アナウンス（英語/日本語モード連動）"""
+    try:
+        if ANNOUNCE_LANGUAGE == "en":
+            greeting = (
+                "Hello! This is your moOde AI Assistant. "
+                "Say 'Hey Master' to request a song, or use the web chat below to play your favorite music."
+            )
+            print(f"🎙️ [Greeting] 起動案内 (English): '{greeting}'", flush=True)
+            speak_english(greeting)
+        else:
+            greeting = (
+                "こんにちは！moOde AI アシスタントです。"
+                "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
+            )
+            print(f"🎙️ [Greeting] 起動案内 (Japanese): '{greeting}'", flush=True)
+            speak(greeting)
+    except Exception as e:
+        print(f"⚠️ [Greeting] 起動アナウンスエラー: {e}", flush=True)
+
+
 def run_voice_loop():
     """音声待機・認識バックグラウンドスレッド"""
-    try:
-        greeting_msg = (
-            "こんにちは！moOde AI アシスタントです。"
-            "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
-        )
-        speak(greeting_msg)
-    except Exception:
-        pass
+    play_startup_greeting()
 
     init_whisper()
     if stt_model is None or pyaudio is None:
@@ -1739,7 +1753,10 @@ def run_voice_loop():
                 continue
 
             if not user_text:
-                speak("はい、どうぞ。")
+                if ANNOUNCE_LANGUAGE == "en":
+                    speak_english("Yes, I'm listening.")
+                else:
+                    speak("はい、どうぞ。")
                 cmd_audio = record_audio_stream()
                 user_text = speech_to_text(cmd_audio)
                 if not user_text:
@@ -1941,12 +1958,8 @@ def main():
         voice_thread = threading.Thread(target=run_voice_loop, daemon=True)
         voice_thread.start()
     else:
-        # no-voice時も起動案内を発話
-        greeting_msg = (
-            "こんにちは！moOde AI アシスタントです。"
-            "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
-        )
-        threading.Thread(target=speak, args=(greeting_msg,), daemon=True).start()
+        # no-voice時も起動案内を発話（言語連動）
+        threading.Thread(target=play_startup_greeting, daemon=True).start()
 
     # Webサーバー (FastAPI + Uvicorn) 起動
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
