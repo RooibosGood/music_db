@@ -382,7 +382,18 @@ stateDiagram-v2
 
 ---
 
-### 5.5 `GET /api/history`
+### 5.5 `GET /api/player/cover`
+- **概要**: 再生中楽曲または指定楽曲のアルバムジャケット画像（Cover Art / Sleeve）を取得（MPD albumart/readpicture ➔ moOde Web ➔ iTunes API ➔ デフォルトSVGの自動多段取得・キャッシュ）。
+- **Query Parameters**:
+  - `file` (string, 任意): 楽曲ファイルパス
+  - `artist` (string, 任意): アーティスト名
+  - `album` (string, 任意): アルバム名
+  - `title` (string, 任意): 曲名
+- **Response**: 画像バイナリ (`image/jpeg` または `image/svg+xml`)
+
+---
+
+### 5.6 `GET /api/history`
 - **概要**: サーバー起動時からのチャット送受信履歴（メモリ上）を取得。
 - **Response Body (JSON)**:
   ```json

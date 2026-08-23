@@ -716,31 +716,67 @@
       position: relative;
     }
 
-    /* Vinyl Disc Art */
+    /* Vinyl Disc & Album Jacket Sleeve */
     .vinyl-wrapper {
       position: relative;
-      width: 170px;
+      width: 250px;
       height: 170px;
-      margin-bottom: 16px;
+      margin: 0 auto 16px auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Album Sleeve (Jacket Card) */
+    .album-sleeve {
+      position: absolute;
+      left: 12px;
+      width: 146px;
+      height: 146px;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.7), 0 0 25px rgba(0, 242, 254, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      z-index: 2;
+      transition: transform 0.4s ease, box-shadow 0.4s ease;
+      background: #0f172a;
+    }
+
+    .album-sleeve:hover {
+      transform: scale(1.04);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.8), 0 0 30px rgba(0, 242, 254, 0.35);
+    }
+
+    .sleeve-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: opacity 0.4s ease;
     }
 
     .vinyl-disc {
-      width: 100%;
-      height: 100%;
+      position: absolute;
+      right: 12px;
+      width: 146px;
+      height: 146px;
       border-radius: 50%;
-      background: radial-gradient(circle, #1a1e29 0%, #0c0f17 50%, #05060a 100%);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(255, 255, 255, 0.05);
+      background: radial-gradient(circle, #1e2430 0%, #0c0f17 55%, #05060a 100%);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.7), 0 0 0 2px rgba(255, 255, 255, 0.05);
       display: flex;
       align-items: center;
       justify-content: center;
       position: relative;
       overflow: hidden;
+      z-index: 1;
       animation: spin-vinyl 16s linear infinite;
       animation-play-state: paused;
+      transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
     }
 
     .vinyl-disc.playing {
       animation-play-state: running;
+      transform: translateX(28px);
     }
 
     @keyframes spin-vinyl {
@@ -757,22 +793,42 @@
         circle,
         transparent 0,
         transparent 4px,
-        rgba(255, 255, 255, 0.02) 5px,
+        rgba(255, 255, 255, 0.03) 5px,
         transparent 6px
       );
     }
 
     .vinyl-center {
-      width: 65px;
-      height: 65px;
+      width: 62px;
+      height: 62px;
       border-radius: 50%;
       background: var(--grad-cyan-blue);
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.5);
-      font-size: 24px;
+      box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.6);
+      position: relative;
+      overflow: hidden;
       z-index: 2;
+      border: 2px solid rgba(255, 255, 255, 0.25);
+    }
+
+    .vinyl-cover-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 50%;
+    }
+
+    .vinyl-center-hole {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: #0b0f19;
+      border: 2px solid rgba(255, 255, 255, 0.4);
+      box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.9);
+      z-index: 3;
     }
 
     /* Audio Visualizer Canvas */
@@ -1161,12 +1217,18 @@
         <span style="font-size: 0.8rem; color: var(--text-dim);" id="moodeIpLabel">IP: 192.168.68.198:6600</span>
       </div>
 
-      <!-- Vinyl & Now Playing -->
+      <!-- Vinyl & Album Jacket Art -->
       <div class="now-playing-container">
         <div class="vinyl-wrapper">
+          <div class="album-sleeve" id="albumSleeve" title="Album Jacket Cover">
+            <img src="/api/player/cover" alt="Album Cover" class="sleeve-img" id="albumCoverSleeve" onerror="this.src='/api/player/cover'">
+          </div>
           <div class="vinyl-disc" id="vinylDisc">
             <div class="vinyl-grooves"></div>
-            <div class="vinyl-center">🎧</div>
+            <div class="vinyl-center">
+              <img src="/api/player/cover" alt="Cover Label" class="vinyl-cover-img" id="albumCoverVinyl" onerror="this.style.display='none'">
+              <div class="vinyl-center-hole"></div>
+            </div>
           </div>
         </div>
 
@@ -1225,6 +1287,9 @@
     const typingIndicatorText = document.querySelector('#typingIndicator span');
     const voiceSpeakToggle = document.getElementById('voiceSpeakToggle');
     const vinylDisc = document.getElementById('vinylDisc');
+    const albumCoverSleeve = document.getElementById('albumCoverSleeve');
+    const albumCoverVinyl = document.getElementById('albumCoverVinyl');
+    let lastLoadedTrackKey = '';
     const playPauseBtn = document.getElementById('playPauseBtn');
     const trackTitle = document.getElementById('trackTitle');
     const trackArtist = document.getElementById('trackArtist');
@@ -1536,6 +1601,28 @@
       trackTitle.textContent = song.title || (isPlaying ? 'タイトル不明' : '再生停止中');
       trackArtist.textContent = song.artist || 'アーティスト未選択';
       trackAlbum.textContent = song.album || (song.file ? song.file.split('/').pop() : 'moOde Library');
+
+      // Update Album Cover Art
+      const trackKey = `${song.artist || ''}__${song.album || ''}__${song.title || ''}__${song.file || ''}`;
+      if (trackKey !== lastLoadedTrackKey && (song.title || song.artist || song.file)) {
+        lastLoadedTrackKey = trackKey;
+        const coverParams = new URLSearchParams({
+          artist: song.artist || '',
+          album: song.album || '',
+          title: song.title || '',
+          file: song.file || '',
+        });
+        const coverUrl = `/api/player/cover?${coverParams.toString()}`;
+        if (albumCoverSleeve) {
+          albumCoverSleeve.style.opacity = '0.4';
+          albumCoverSleeve.src = coverUrl;
+          albumCoverSleeve.onload = () => { albumCoverSleeve.style.opacity = '1'; };
+        }
+        if (albumCoverVinyl) {
+          albumCoverVinyl.src = coverUrl;
+          albumCoverVinyl.style.display = 'block';
+        }
+      }
 
       // Hi-Res
       if (song.is_hires || (song.sample_rate && parseInt(song.sample_rate) > 48000) || (song.bit_depth && parseInt(song.bit_depth) > 16)) {

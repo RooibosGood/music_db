@@ -18,12 +18,12 @@ import urllib.parse
 import urllib.request
 import wave
 from contextlib import asynccontextmanager
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 # 音声系ライブラリの安全なインポート
@@ -376,6 +376,129 @@ def add_db_tracks_to_mpd(client: Any, db_tracks: List[Dict[str, Any]]) -> List[D
                 pass
 
     return added_tracks
+
+
+# ==================== アルバムジャケット画像 (Cover Art) 取得 ====================
+cover_art_cache: Dict[str, Tuple[bytes, str]] = {}
+
+DEFAULT_COVER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+  <defs>
+    <radialGradient id="grad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00f2fe" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#4facfe" stop-opacity="0.2"/>
+    </radialGradient>
+  </defs>
+  <rect width="300" height="300" rx="16" fill="#111827"/>
+  <circle cx="150" cy="150" r="100" fill="url(#grad)"/>
+  <circle cx="150" cy="150" r="30" fill="#0f172a" stroke="#00f2fe" stroke-width="3"/>
+  <circle cx="150" cy="150" r="6" fill="#00f2fe"/>
+  <text x="150" y="270" text-anchor="middle" fill="#94a3b8" font-size="14" font-family="sans-serif">moOde Audio Player</text>
+</svg>"""
+
+
+def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = "", title: str = "") -> Tuple[bytes, str]:
+    """MPD / moOde Web / iTunes API / デフォルトSVG からアルバムジャケット画像を取得"""
+    cache_key = f"{song_file}::{artist}::{album}::{title}"
+    if cache_key in cover_art_cache:
+        return cover_art_cache[cache_key]
+
+    # 1. MPD albumart コマンド (MPD 0.21+ / python-mpd2)
+    if song_file and MPDClient is not None:
+        try:
+            client = get_mpd_client()
+            if client:
+                try:
+                    res = client.albumart(song_file, 0)
+                    if isinstance(res, dict) and "binary" in res:
+                        img_data = bytearray(res["binary"])
+                        size = int(res.get("size", len(img_data)))
+                        while len(img_data) < size:
+                            chunk = client.albumart(song_file, len(img_data))
+                            if not chunk or "binary" not in chunk:
+                                break
+                            img_data.extend(chunk["binary"])
+                        if len(img_data) > 500:
+                            ret = (bytes(img_data), "image/jpeg")
+                            cover_art_cache[cache_key] = ret
+                            return ret
+                except Exception:
+                    pass
+
+                # 2. MPD readpicture コマンド (ID3埋め込み画像)
+                try:
+                    res = client.readpicture(song_file, 0)
+                    if isinstance(res, dict) and "binary" in res:
+                        img_data = bytearray(res["binary"])
+                        size = int(res.get("size", len(img_data)))
+                        while len(img_data) < size:
+                            chunk = client.readpicture(song_file, len(img_data))
+                            if not chunk or "binary" not in chunk:
+                                break
+                            img_data.extend(chunk["binary"])
+                        if len(img_data) > 500:
+                            ret = (bytes(img_data), "image/jpeg")
+                            cover_art_cache[cache_key] = ret
+                            return ret
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        client.close()
+                        client.disconnect()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # 3. moOde Web サーバーの coverart.php
+    if song_file and MOODE_IP:
+        try:
+            quoted_file = urllib.parse.quote(song_file)
+            cover_url = f"http://{MOODE_IP}/coverart.php?file={quoted_file}"
+            req = urllib.request.Request(cover_url, headers={"User-Agent": "moOde-AI/1.0"})
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                if resp.status == 200:
+                    content_type = resp.headers.get("Content-Type", "image/jpeg")
+                    img_bytes = resp.read()
+                    if len(img_bytes) > 500 and "image" in content_type:
+                        ret = (img_bytes, content_type)
+                        cover_art_cache[cache_key] = ret
+                        return ret
+        except Exception:
+            pass
+
+    # 4. iTunes Search API (高画質ジャケット画像の検索)
+    search_term = ""
+    if artist and artist not in ("アーティスト未設定", "Unknown", "unknown") and album and album not in ("moOde Audio Library", "Unknown", "unknown"):
+        search_term = f"{artist} {album}"
+    elif artist and artist not in ("アーティスト未設定", "Unknown", "unknown") and title and title not in ("未選択", "Unknown"):
+        search_term = f"{artist} {title}"
+    elif album and album not in ("moOde Audio Library", "Unknown"):
+        search_term = album
+
+    if search_term:
+        try:
+            itunes_url = f"https://itunes.apple.com/search?term={urllib.parse.quote(search_term)}&entity=album&limit=1"
+            req = urllib.request.Request(itunes_url, headers={"User-Agent": "Mozilla/5.0 moOde-AI/1.0"})
+            with urllib.request.urlopen(req, timeout=3.0) as resp:
+                res_json = json.loads(resp.read().decode("utf-8"))
+                results = res_json.get("results", [])
+                if results:
+                    art_url = results[0].get("artworkUrl100", "")
+                    if art_url:
+                        hi_art_url = art_url.replace("100x100bb.jpg", "600x600bb.jpg")
+                        req_art = urllib.request.Request(hi_art_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req_art, timeout=3.0) as art_resp:
+                            img_bytes = art_resp.read()
+                            if len(img_bytes) > 500:
+                                ret = (img_bytes, "image/jpeg")
+                                cover_art_cache[cache_key] = ret
+                                return ret
+        except Exception:
+            pass
+
+    # 5. デフォルト SVG
+    return (DEFAULT_COVER_SVG.encode("utf-8"), "image/svg+xml")
 
 
 # ==================== MPD (moOde) 制御 ====================
@@ -2026,6 +2149,25 @@ async def api_player_control(req: ControlRequest):
     res = control_moode(cmd)
     broadcast_status()
     return JSONResponse({"result": res, "status": get_moode_status()})
+
+
+@app.get("/api/player/cover")
+async def api_player_cover(file: Optional[str] = None, artist: Optional[str] = None, album: Optional[str] = None, title: Optional[str] = None):
+    """現在再生中楽曲または指定楽曲のアルバムジャケット画像（Cover Art）を取得"""
+    if not file and not artist and not album and not title:
+        status = get_moode_status()
+        song = status.get("song", {})
+        file = song.get("file", "")
+        artist = song.get("artist", "")
+        album = song.get("album", "")
+        title = song.get("title", "")
+
+    img_bytes, media_type = get_album_cover_bytes(song_file=file or "", artist=artist or "", album=album or "", title=title or "")
+    return Response(
+        content=img_bytes,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @app.get("/api/history")
