@@ -495,10 +495,12 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             client.clear()
 
             print(f"🔍 [music_meta.db] 楽曲検索中: query='{query}'", flush=True)
+            broadcast_process_status("db", f"🔍 楽曲データベースを検索中 (SQLite): 「{query}」")
             db_tracks = search_tracks_from_db(query, limit=15)
             print(f"📊 [music_meta.db] 該当曲数: {len(db_tracks)} 件", flush=True)
 
             if db_tracks:
+                broadcast_process_status("moode", f"🎵 moOde 再生キューを更新中 ({len(db_tracks)}曲をセット)...")
                 added_tracks = add_db_tracks_to_mpd(client, db_tracks)
                 added_count = len(added_tracks)
 
@@ -546,18 +548,23 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 print(f"⚠️ [music_meta.db] '{query}' に該当する曲が見つかりません", flush=True)
 
         elif action == "play":
+            broadcast_process_status("moode", "▶️ moOde 音楽再生を再開中...", auto_idle_sec=3.0)
             client.play()
             result["success"] = True
             result["message"] = "音楽の再生を再開しました。"
         elif action == "pause":
+            broadcast_process_status("moode", "⏸️ 音楽を一時停止中...", auto_idle_sec=3.0)
             client.pause(1)
             result["success"] = True
             result["message"] = "音楽を一時停止しました。"
         elif action == "stop":
+            broadcast_process_status("moode", "⏹️ 音楽再生を停止中...", auto_idle_sec=3.0)
             client.stop()
             result["success"] = True
             result["message"] = "音楽を停止しました。"
         elif action in ("next", "previous"):
+            act_text = "次の曲にスキップ" if action == "next" else "前の曲に戻る"
+            broadcast_process_status("moode", f"⏭️ moOde 操作: {act_text}中...")
             if action == "next":
                 client.next()
                 result["message"] = "次の曲にスキップしました。"
@@ -1211,6 +1218,7 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
     """テキスト ➔ 意図抽出 (LLM - JSON構造化)"""
     started_at = time.monotonic()
     print(f"🤖 [LLM] 解析要求: '{user_text}'", flush=True)
+    broadcast_process_status("llm", f"🤖 AIが選曲・意図を解釈中 ({LLM_MODEL}): 「{user_text}」")
 
     system_prompt = """あなたは音楽再生AIアシスタントです。ユーザーの要望を解釈し、moOde audioの操作コマンドと自然な日本語の返答を生成してください。
 出力は必ず、説明文やMarkdownを含まない1つのJSONオブジェクトだけにしてください。
@@ -1299,6 +1307,7 @@ def process_user_message(
 ) -> Dict[str, Any]:
     """音声・Web Chat両方からのメッセージを処理するコア関数 (description読み上げ対応)"""
     print(f"\n📩 [Request] 処理開始 (from {source}): '{user_text}'", flush=True)
+    broadcast_process_status("llm", f"🤖 リクエスト処理開始: 「{user_text}」")
 
     # 1. LLMによる意図抽出
     cmd = parse_intent_with_llm(user_text)
@@ -1343,6 +1352,7 @@ def process_user_message(
         client = get_mpd_client()
         if client:
             try:
+                broadcast_process_status("playing", "▶️ moOde 音楽再生をスタートしました", auto_idle_sec=3.5)
                 client.play()
                 client.close()
                 client.disconnect()
@@ -1354,17 +1364,23 @@ def process_user_message(
     if speak_voice:
         def speak_and_play_flow():
             if ANNOUNCE_LANGUAGE == "en" and cmd.get("action") in ("play_search", "next", "previous"):
+                broadcast_process_status("tts", "🎙️ DJ英語曲紹介音声を生成・再生中 (edge-tts)...")
                 speak_english(reply_text)
             else:
+                broadcast_process_status("tts", "🎙️ 曲紹介音声を合成・再生中 (VOICEVOX)...")
                 speak(reply_text)
             if needs_playback:
                 trigger_playback_start()
+            else:
+                broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
 
         threading.Thread(target=speak_and_play_flow, daemon=True).start()
     else:
         # 音声読み上げなしの場合は即座に再生
         if needs_playback:
             trigger_playback_start()
+        else:
+            broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
 
     # 5. 履歴に追加
     msg_record = {
@@ -1430,13 +1446,45 @@ async def _async_broadcast(data: Dict[str, Any]):
             active_websockets.remove(ws)
 
 
+current_processing_state: Dict[str, Any] = {
+    "step": "idle",
+    "detail": "音声待機中 (「ヘイ、マスター」)",
+    "timestamp": time.time(),
+}
+
+
+def broadcast_process_status(step: str, detail: str, auto_idle_sec: Optional[float] = None):
+    """処理進行状況をリアルタイムで WebSocket クライアントに通知 (Web画面でのステータス表示用)"""
+    global current_processing_state
+    current_processing_state = {
+        "step": step,
+        "detail": detail,
+        "timestamp": time.time(),
+    }
+    print(f"⚡ [Process Status] [{step.upper()}] {detail}", flush=True)
+    broadcast_event({
+        "type": "process_status",
+        "step": step,
+        "detail": detail,
+        "timestamp": time.time(),
+    })
+
+    if auto_idle_sec:
+        def _reset_to_idle():
+            time.sleep(auto_idle_sec)
+            if current_processing_state.get("step") == step:
+                broadcast_process_status("idle", "音声待機中 (「ヘイ、マスター」)")
+        threading.Thread(target=_reset_to_idle, daemon=True).start()
+
+
 def broadcast_status():
-    """現在の moOde 再生状態と音声ステータスをプッシュ"""
+    """現在の moOde 再生状態、音声ステータス、および処理ステータスをプッシュ"""
     status = get_moode_status()
     broadcast_event({
         "type": "status_update",
         "player_status": status,
         "voice_status": voice_state,
+        "process_status": current_processing_state,
     })
 
 
@@ -1634,6 +1682,7 @@ def run_track_watcher_loop():
             # 2. 曲情報と解説文を取得
             t_title = song.get("title") or "楽曲"
             t_artist = song.get("artist")
+            broadcast_process_status("db", f"🔍 次の曲の解説を取得中 (SQLite): {t_title}")
             db_meta = find_track_metadata(file_path=cur_file, title=t_title, artist=t_artist)
             description_ja = db_meta.get("description_ja", "") if db_meta else ""
             description_en = db_meta.get("description_en", "") if db_meta else ""
@@ -1677,14 +1726,17 @@ def run_track_watcher_loop():
 
             # 3. 発話を実行（排他ロックで安全に発話）
             if ANNOUNCE_LANGUAGE == "en":
+                broadcast_process_status("tts", f"🎙️ DJ曲紹介アナウンス中: {t_title}")
                 speak_english(announce_text)
             else:
+                broadcast_process_status("tts", f"🎙️ 曲紹介アナウンス中: {t_title}")
                 speak(announce_text)
 
             # 4. 発話完了後に音楽再生を再開
             mpd_client = get_mpd_client()
             if mpd_client:
                 try:
+                    broadcast_process_status("playing", f"▶️ 音楽再生を再開しました: {t_title}", auto_idle_sec=3.5)
                     mpd_client.play()
                     mpd_client.close()
                     mpd_client.disconnect()
@@ -1706,14 +1758,18 @@ def play_startup_greeting():
                 "Say 'Hey Master' to request a song, or use the web chat below to play your favorite music."
             )
             print(f"🎙️ [Greeting] 起動案内 (English): '{greeting}'", flush=True)
+            broadcast_process_status("tts", "🎙️ 起動案内を発話中...")
             speak_english(greeting)
+            broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
         else:
             greeting = (
                 "こんにちは！moOde AI アシスタントです。"
                 "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
             )
             print(f"🎙️ [Greeting] 起動案内 (Japanese): '{greeting}'", flush=True)
+            broadcast_process_status("tts", "🎙️ 起動案内を発話中...")
             speak(greeting)
+            broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
     except Exception as e:
         print(f"⚠️ [Greeting] 起動アナウンスエラー: {e}", flush=True)
 
@@ -1743,13 +1799,16 @@ def run_voice_loop():
             voice_state["is_listening"] = True
             voice_state["state"] = "recognizing"
             broadcast_event({"type": "voice_event", "event": "listening"})
+            broadcast_process_status("stt", "🎙️ 音声を文字起こし中 (Whisper)...")
 
             wake_text = speech_to_text(audio_data)
             if not wake_text:
+                broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
                 continue
 
             user_text = command_after_wake_word(wake_text)
             if user_text is None:
+                broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
                 continue
 
             if not user_text:
@@ -1758,8 +1817,10 @@ def run_voice_loop():
                 else:
                     speak("はい、どうぞ。")
                 cmd_audio = record_audio_stream()
+                broadcast_process_status("stt", "🎙️ コマンドを認識中 (Whisper)...")
                 user_text = speech_to_text(cmd_audio)
                 if not user_text:
+                    broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
                     continue
 
             print(f"👤 [Voice Input] ユーザー発言: {user_text}", flush=True)

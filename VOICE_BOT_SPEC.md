@@ -473,6 +473,25 @@ stateDiagram-v2
 ```
 ※ `event` の値: `"idle"`, `"listening"`, `"recognizing"`
 
+#### ④ リアルタイム処理ステータスイベント (`process_status`)
+バックエンドで現在実行中のフェーズ（AI意図解析、DB検索、キュー更新、DJ音声合成、再生開始など）を Web UI の **Process Tracker** にリアルタイム配信します。
+```json
+{
+  "type": "process_status",
+  "step": "llm",
+  "detail": "🤖 AIが選曲・意図を解釈中 (qwen2.5:1.5b): 「Jazzをかけて」",
+  "timestamp": 1724400000.123
+}
+```
+※ `step` の値:
+- `"idle"`: 音声待機中
+- `"listening"` / `"stt"`: 音声録音・文字起こし中 (Whisper)
+- `"llm"`: AI選曲・意図解釈中 (Qwen)
+- `"db"`: 楽曲データベース検索中 (SQLite `music_meta.db`)
+- `"moode"`: moOde 再生キュー更新・プレイヤー操作中 (MPD)
+- `"tts"`: DJ曲紹介音声の合成・出力中 (edge-tts / VOICEVOX)
+- `"playing"`: 音楽再生スタート
+
 ---
 
 ## 7. コマンドライン引数 & 起動方法

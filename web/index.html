@@ -329,6 +329,138 @@
       transform: translateY(0);
     }
 
+    /* Live Process Tracker */
+    .process-tracker {
+      background: rgba(13, 18, 29, 0.75);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 10px 14px;
+      margin-bottom: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .process-tracker.active {
+      border-color: rgba(0, 242, 254, 0.4);
+      box-shadow: 0 0 16px rgba(0, 242, 254, 0.15);
+      background: rgba(15, 23, 42, 0.85);
+    }
+
+    .process-tracker::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--grad-cyan-blue);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.4s ease;
+    }
+
+    .process-tracker.active::before {
+      transform: scaleX(1);
+    }
+
+    .process-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .process-current {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--text-main);
+    }
+
+    .process-spinner {
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(0, 242, 254, 0.2);
+      border-top-color: var(--accent-cyan);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: none;
+    }
+
+    .process-tracker.active .process-spinner {
+      display: inline-block;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .process-badge {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: var(--radius-full);
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-dim);
+      font-family: 'JetBrains Mono', monospace;
+      letter-spacing: 0.05em;
+    }
+
+    .process-tracker.active .process-badge {
+      background: rgba(0, 242, 254, 0.15);
+      color: var(--accent-cyan);
+      border: 1px solid rgba(0, 242, 254, 0.3);
+    }
+
+    /* Step Pipeline */
+    .process-steps {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      padding-top: 4px;
+      border-top: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .step-node {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      transition: all 0.25s ease;
+      white-space: nowrap;
+    }
+
+    .step-node.current {
+      color: var(--accent-cyan);
+      font-weight: 600;
+      text-shadow: 0 0 8px rgba(0, 242, 254, 0.5);
+      transform: scale(1.05);
+    }
+
+    .step-node.completed {
+      color: var(--accent-emerald);
+    }
+
+    .step-divider {
+      flex: 1;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.08);
+      margin: 0 4px;
+      transition: background 0.3s ease;
+    }
+
+    .step-divider.active {
+      background: var(--accent-cyan);
+      box-shadow: 0 0 4px var(--accent-cyan);
+    }
+
     /* Chat Messages Box */
     .chat-messages {
       flex: 1;
@@ -953,6 +1085,28 @@
         <button class="chip-btn" onclick="sendQuickPrompt('次の曲にして')">⏭️ スキップ</button>
       </div>
 
+      <!-- Live Process Tracker (リアルタイム処理進行状況表示) -->
+      <div class="process-tracker" id="processTracker">
+        <div class="process-header">
+          <div class="process-current">
+            <div class="process-spinner" id="processSpinner"></div>
+            <span id="processDetailText">🎙️ 音声待機中 (「ヘイ、マスター」)</span>
+          </div>
+          <span class="process-badge" id="processStepBadge">IDLE</span>
+        </div>
+        <div class="process-steps">
+          <div class="step-node" id="stepNodeInput">🎙️ 入力</div>
+          <div class="step-divider" id="stepDiv1"></div>
+          <div class="step-node" id="stepNodeLlm">🤖 AI選曲</div>
+          <div class="step-divider" id="stepDiv2"></div>
+          <div class="step-node" id="stepNodeDb">🔍 DB検索</div>
+          <div class="step-divider" id="stepDiv3"></div>
+          <div class="step-node" id="stepNodeTts">🎙️ DJ曲紹介</div>
+          <div class="step-divider" id="stepDiv4"></div>
+          <div class="step-node" id="stepNodePlay">▶️ 再生</div>
+        </div>
+      </div>
+
       <!-- Messages Timeline -->
       <div class="chat-messages" id="chatMessages">
         <div class="message assistant">
@@ -1068,6 +1222,7 @@
     const chatInput = document.getElementById('chatInput');
     const sendBtn = document.getElementById('sendBtn');
     const typingIndicator = document.getElementById('typingIndicator');
+    const typingIndicatorText = document.querySelector('#typingIndicator span');
     const voiceSpeakToggle = document.getElementById('voiceSpeakToggle');
     const vinylDisc = document.getElementById('vinylDisc');
     const playPauseBtn = document.getElementById('playPauseBtn');
@@ -1086,6 +1241,21 @@
     const wsStatusText = document.getElementById('wsStatusText');
     const soundBars = document.getElementById('soundBars');
     const voiceListenerText = document.getElementById('voiceListenerText');
+
+    // Process Tracker Elements
+    const processTracker = document.getElementById('processTracker');
+    const processDetailText = document.getElementById('processDetailText');
+    const processStepBadge = document.getElementById('processStepBadge');
+    const processSpinner = document.getElementById('processSpinner');
+    const stepNodeInput = document.getElementById('stepNodeInput');
+    const stepNodeLlm = document.getElementById('stepNodeLlm');
+    const stepNodeDb = document.getElementById('stepNodeDb');
+    const stepNodeTts = document.getElementById('stepNodeTts');
+    const stepNodePlay = document.getElementById('stepNodePlay');
+    const stepDiv1 = document.getElementById('stepDiv1');
+    const stepDiv2 = document.getElementById('stepDiv2');
+    const stepDiv3 = document.getElementById('stepDiv3');
+    const stepDiv4 = document.getElementById('stepDiv4');
 
     // Canvas Visualizer
     const canvas = document.getElementById('visualizerCanvas');
@@ -1194,10 +1364,71 @@
       if (data.type === 'status_update') {
         updatePlayerUI(data.player_status);
         updateVoiceStatus(data.voice_status);
+        if (data.process_status) {
+          updateProcessStatus(data.process_status);
+        }
       } else if (data.type === 'chat_message') {
         appendMessage(data.message);
       } else if (data.type === 'voice_event') {
         handleVoiceEvent(data);
+      } else if (data.type === 'process_status') {
+        updateProcessStatus(data);
+      }
+    }
+
+    function updateProcessStatus(status) {
+      if (!status) return;
+      const step = status.step || 'idle';
+      const detail = status.detail || '🎙️ 音声待機中 (「ヘイ、マスター」)';
+
+      if (processDetailText) processDetailText.textContent = detail;
+      if (typingIndicatorText) typingIndicatorText.textContent = detail;
+
+      // 各ノード・ラインのクラスをリセット
+      const nodes = [stepNodeInput, stepNodeLlm, stepNodeDb, stepNodeTts, stepNodePlay];
+      const divs = [stepDiv1, stepDiv2, stepDiv3, stepDiv4];
+      nodes.forEach(n => { if (n) n.className = 'step-node'; });
+      divs.forEach(d => { if (d) d.className = 'step-divider'; });
+
+      if (step === 'idle') {
+        if (processTracker) processTracker.classList.remove('active');
+        if (processStepBadge) {
+          processStepBadge.textContent = 'IDLE';
+          processStepBadge.style.color = 'var(--text-dim)';
+        }
+      } else {
+        if (processTracker) processTracker.classList.add('active');
+
+        if (step === 'listening' || step === 'stt') {
+          if (processStepBadge) processStepBadge.textContent = '1. 音声認識';
+          if (stepNodeInput) stepNodeInput.className = 'step-node current';
+        } else if (step === 'llm') {
+          if (processStepBadge) processStepBadge.textContent = '2. AI選曲';
+          if (stepNodeInput) stepNodeInput.className = 'step-node completed';
+          if (stepDiv1) stepDiv1.className = 'step-divider active';
+          if (stepNodeLlm) stepNodeLlm.className = 'step-node current';
+        } else if (step === 'db' || step === 'moode') {
+          if (processStepBadge) processStepBadge.textContent = '3. DB検索・キュー';
+          if (stepNodeInput) stepNodeInput.className = 'step-node completed';
+          if (stepNodeLlm) stepNodeLlm.className = 'step-node completed';
+          if (stepDiv1) stepDiv1.className = 'step-divider active';
+          if (stepDiv2) stepDiv2.className = 'step-divider active';
+          if (stepNodeDb) stepNodeDb.className = 'step-node current';
+        } else if (step === 'tts') {
+          if (processStepBadge) processStepBadge.textContent = '4. DJ曲紹介';
+          if (stepNodeInput) stepNodeInput.className = 'step-node completed';
+          if (stepNodeLlm) stepNodeLlm.className = 'step-node completed';
+          if (stepNodeDb) stepNodeDb.className = 'step-node completed';
+          if (stepDiv1) stepDiv1.className = 'step-divider active';
+          if (stepDiv2) stepDiv2.className = 'step-divider active';
+          if (stepDiv3) stepDiv3.className = 'step-divider active';
+          if (stepNodeTts) stepNodeTts.className = 'step-node current';
+        } else if (step === 'playing') {
+          if (processStepBadge) processStepBadge.textContent = '5. 音楽再生中';
+          nodes.forEach(n => { if (n) n.className = 'step-node completed'; });
+          divs.forEach(d => { if (d) d.className = 'step-divider active'; });
+          if (stepNodePlay) stepNodePlay.className = 'step-node current completed';
+        }
       }
     }
 
@@ -1306,6 +1537,7 @@
       chatInput.disabled = true;
       sendBtn.disabled = true;
       typingIndicator.style.display = 'flex';
+      updateProcessStatus({ step: 'llm', detail: `🤖 AIが選曲・意図を解釈中: 「${text}」` });
       chatMessages.scrollTop = chatMessages.scrollHeight;
 
       try {
