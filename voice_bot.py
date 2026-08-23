@@ -5,9 +5,11 @@ import json
 import os
 import random
 import re
+import shutil
 import sqlite3
 import struct
 import subprocess
+import sys
 import threading
 import time
 import traceback
@@ -1071,26 +1073,44 @@ def speak_english(text: str):
             print(f"🎙️ [English DJ] edge-tts 音声合成を試行中... (ボイス: {ENGLISH_VOICE})", flush=True)
             # 1-1. Python モジュールとしての edge_tts 呼び出しを試行
             if edge_tts is not None:
-                async def _gen_edge_tts():
-                    communicate = edge_tts.Communicate(text, ENGLISH_VOICE)
-                    await communicate.save(temp_mp3)
                 try:
+                    async def _gen_edge_tts():
+                        communicate = edge_tts.Communicate(text, ENGLISH_VOICE)
+                        await communicate.save(temp_mp3)
                     asyncio.run(_gen_edge_tts())
+                    print("✅ [English DJ] edge_tts Python モジュールで MP3 生成成功", flush=True)
                 except Exception as py_edge_err:
                     print(f"⚠️ [edge_tts Python] 生成エラー: {py_edge_err}", flush=True)
 
-            # 1-2. CLI コマンドの edge-tts を試行（MP3が未生成の場合）
+            # 1-2. Python インタプリタ経由 (sys.executable -m edge_tts) を試行
             if not os.path.exists(temp_mp3) or os.path.getsize(temp_mp3) < 100:
-                cmd = [
-                    "edge-tts",
+                cmd_py = [
+                    sys.executable, "-m", "edge_tts",
                     "--voice", ENGLISH_VOICE,
                     "--text", text,
                     "--write-media", temp_mp3,
                 ]
-                res_cli = subprocess.run(cmd, capture_output=True, timeout=12)
-                if res_cli.returncode != 0:
-                    err = res_cli.stderr.decode("utf-8", errors="ignore").strip()
-                    print(f"⚠️ [edge-tts CLI] 失敗 (code {res_cli.returncode}): {err}", flush=True)
+                res_py = subprocess.run(cmd_py, capture_output=True, timeout=12)
+                if res_py.returncode == 0 and os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 100:
+                    print("✅ [English DJ] python -m edge_tts で MP3 生成成功", flush=True)
+                else:
+                    err = res_py.stderr.decode("utf-8", errors="ignore").strip()
+                    if err:
+                        print(f"⚠️ [python -m edge_tts] 失敗: {err}", flush=True)
+
+            # 1-3. システム CLI コマンドの edge-tts を試行
+            if not os.path.exists(temp_mp3) or os.path.getsize(temp_mp3) < 100:
+                if shutil.which("edge-tts"):
+                    cmd_cli = [
+                        "edge-tts",
+                        "--voice", ENGLISH_VOICE,
+                        "--text", text,
+                        "--write-media", temp_mp3,
+                    ]
+                    res_cli = subprocess.run(cmd_cli, capture_output=True, timeout=12)
+                    if res_cli.returncode != 0:
+                        err = res_cli.stderr.decode("utf-8", errors="ignore").strip()
+                        print(f"⚠️ [edge-tts CLI] 失敗: {err}", flush=True)
 
             if os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 100:
                 print(f"📦 [English DJ] MP3生成成功 ({os.path.getsize(temp_mp3)} bytes)。WAV変換中...", flush=True)
@@ -1100,13 +1120,11 @@ def speak_english(text: str):
                     capture_output=True, timeout=6
                 )
                 if conv_res.returncode == 0 and os.path.exists(temp_raw_wav):
-                    # 無音パディング付加（SP 20の頭切れ防止）
                     add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
                     if play_wav_file(temp_padded_wav):
                         tts_success = True
                         print("✅ [English DJ] edge-tts 音声の再生完了", flush=True)
                 else:
-                    # ffmpeg が無い場合の mpg123 試行
                     mpg_res = subprocess.run(["mpg123", "-w", temp_raw_wav, temp_mp3], capture_output=True)
                     if mpg_res.returncode == 0 and os.path.exists(temp_raw_wav):
                         add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
@@ -1118,18 +1136,19 @@ def speak_english(text: str):
 
         # 方法2: espeak-ng / espeak (オフライン英語音声合成)
         if not tts_success and os.name != "nt":
-            try:
-                print("🎙️ [English DJ] espeak-ng / espeak でフォールバック生成中...", flush=True)
-                for espeak_cmd in ["espeak-ng", "espeak"]:
-                    res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "140", "-w", temp_raw_wav, text], capture_output=True)
-                    if res.returncode == 0 and os.path.exists(temp_raw_wav):
-                        add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
-                        if play_wav_file(temp_padded_wav):
-                            tts_success = True
-                            print(f"✅ [English DJ] {espeak_cmd} 音声の再生完了", flush=True)
-                            break
-            except Exception as e:
-                print(f"⚠️ [English DJ] espeak 処理例外: {e}", flush=True)
+            for espeak_cmd in ["espeak-ng", "espeak"]:
+                if shutil.which(espeak_cmd):
+                    try:
+                        print(f"🎙️ [English DJ] {espeak_cmd} で音声生成中...", flush=True)
+                        res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "140", "-w", temp_raw_wav, text], capture_output=True)
+                        if res.returncode == 0 and os.path.exists(temp_raw_wav):
+                            add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
+                            if play_wav_file(temp_padded_wav):
+                                tts_success = True
+                                print(f"✅ [English DJ] {espeak_cmd} 音声の再生完了", flush=True)
+                                break
+                    except Exception as esp_err:
+                        print(f"⚠️ [English DJ] {espeak_cmd} 例外: {esp_err}", flush=True)
 
         # 方法3: Windows SAPI (Windowsローカル環境用)
         if not tts_success and os.name == "nt":
@@ -1140,23 +1159,26 @@ def speak_english(text: str):
             except Exception:
                 pass
 
-        # 方法4: VOICEVOX (最終フォールバック - 英語をカタカナに変換して確実に発話)
+        # 方法4: VOICEVOX (最終フォールバック - 短縮カタカナ変換でタイムアウト防止)
         if not tts_success:
             print("⚠️ [English DJ] 英語TTSエンジンが利用できないため、VOICEVOX (カタカナ変換) にフォールバックします。", flush=True)
+            print("💡 ヒント: Jetson 上で 'pip install edge-tts' を実行すると高音質な英語DJ音声が有効になります。", flush=True)
             try:
-                kana_text = convert_english_to_katakana(text)
+                # VOICEVOX のタイムアウトを防ぐため、長文の場合は最初の1〜2文（最大80文字）に要約
+                short_text = clean_english_text_for_speech(text, max_chars=85)
+                kana_text = convert_english_to_katakana(short_text)
                 print(f"🔤 [English DJ] VOICEVOX 読み上げ用カタカナ: '{kana_text}'", flush=True)
                 encoded_text = urllib.parse.quote(kana_text)
                 query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={SPEAKER_ID}"
                 req_q = urllib.request.Request(query_url, data=b"", headers={"User-Agent": "moOde-AI/1.0"}, method="POST")
-                with urllib.request.urlopen(req_q, timeout=20) as res_q:
+                with urllib.request.urlopen(req_q, timeout=15) as res_q:
                     query_data = res_q.read()
                 synth_url = f"{VOICEVOX_URL}/synthesis?speaker={SPEAKER_ID}"
                 req_s = urllib.request.Request(
                     synth_url, data=query_data,
                     headers={"Content-Type": "application/json", "User-Agent": "moOde-AI/1.0"}, method="POST"
                 )
-                with urllib.request.urlopen(req_s, timeout=45) as res_s:
+                with urllib.request.urlopen(req_s, timeout=30) as res_s:
                     wav_bytes = res_s.read()
 
                 with wave.open(io.BytesIO(wav_bytes), "rb") as source_wav:
