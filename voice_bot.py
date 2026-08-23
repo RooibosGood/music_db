@@ -141,7 +141,7 @@ def find_track_metadata(
 
             cur.execute(
                 """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE file_path LIKE ? OR relative_path LIKE ? OR relative_path = ? OR file_path LIKE ? OR relative_path LIKE ?
                 LIMIT 1;
@@ -149,7 +149,7 @@ def find_track_metadata(
                 (f"%{fname}", f"%{fname}", norm_path, f"%{fname_stem}%", f"%{fname_stem}%"),
             )
             row = cur.fetchone()
-            if row and row["description"]:
+            if row and (row["description_ja"] or row["description_en"]):
                 conn.close()
                 return dict(row)
 
@@ -157,7 +157,7 @@ def find_track_metadata(
         if title and artist and artist != "アーティスト未設定" and artist != "Unknown":
             cur.execute(
                 """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE (title LIKE ? OR ? LIKE '%' || title || '%') AND (artist LIKE ? OR ? LIKE '%' || artist || '%')
                 LIMIT 1;
@@ -165,7 +165,7 @@ def find_track_metadata(
                 (f"%{title}%", title, f"%{artist}%", artist),
             )
             row = cur.fetchone()
-            if row and row["description"]:
+            if row and (row["description_ja"] or row["description_en"]):
                 conn.close()
                 return dict(row)
 
@@ -173,7 +173,7 @@ def find_track_metadata(
         if title and title != "未選択" and title != "Unknown":
             cur.execute(
                 """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE title LIKE ? OR ? LIKE '%' || title || '%'
                 ORDER BY CASE WHEN title = ? THEN 0 ELSE 1 END
@@ -257,8 +257,8 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
             words = keyword_q.split()
             kw_conditions = []
             for w in words:
-                kw_conditions.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR description LIKE ?)")
-                params.extend([f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%"])
+                kw_conditions.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?)")
+                params.extend([f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%"])
             if kw_conditions:
                 conditions.append(" AND ".join(kw_conditions))
 
@@ -267,10 +267,10 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         
         # まず直近再生除外 ＋ description ありの候補をランダムに50件取得
         sql = f"""
-            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
             FROM tracks
             {base_where}
-            ORDER BY (CASE WHEN description IS NOT NULL AND description != '' THEN 0 ELSE 1 END), RANDOM()
+            ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
             LIMIT 50;
         """
         cur.execute(sql, params)
@@ -283,20 +283,20 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         # ヒットしなかった場合、キーワードの部分一致でフォールバック
         if not candidate_rows and keyword_q:
             cur.execute(f"""
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
-                WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description LIKE ?
-                ORDER BY (CASE WHEN description IS NOT NULL AND description != '' THEN 0 ELSE 1 END), RANDOM()
+                WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?
+                ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
                 LIMIT 50;
-            """, (f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%"))
+            """, (f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%"))
             candidate_rows = [dict(r) for r in cur.fetchall()]
 
         # それでもヒットしない場合、ランダムに曲を取得
         if not candidate_rows:
             cur.execute("""
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description
+                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
-                WHERE description IS NOT NULL AND description != ''
+                WHERE (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '')
                 ORDER BY RANDOM()
                 LIMIT 50;
             """)
@@ -418,7 +418,9 @@ def get_moode_status() -> Dict[str, Any]:
         song_album = song.get("album") or "moOde Audio Library"
 
         db_meta = find_track_metadata(file_path=song_file, title=song_title, artist=song_artist)
-        description = db_meta.get("description", "") if db_meta else ""
+        description_ja = db_meta.get("description_ja", "") if db_meta else ""
+        description_en = db_meta.get("description_en", "") if db_meta else ""
+        description = (description_en if ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
         song_info = {
             "title": song_title,
@@ -430,6 +432,8 @@ def get_moode_status() -> Dict[str, Any]:
             "bit_depth": bit_depth,
             "is_hires": (int(sample_rate) > 48000 or int(bit_depth) > 16) if sample_rate.isdigit() and bit_depth.isdigit() else (db_meta.get("is_hires", 0) == 1 if db_meta else False),
             "description": description,
+            "description_ja": description_ja,
+            "description_en": description_en,
         }
 
         return {
@@ -462,6 +466,8 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
         "tracks_added": [],
         "track_info": None,
         "description": "",
+        "description_ja": "",
+        "description_en": "",
         "message": "",
     }
 
@@ -494,7 +500,9 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 first_title = first_track.get("title", "未設定")
                 first_artist = first_track.get("artist", "アーティスト未設定")
                 first_file = first_track.get("relative_path", "")
-                description = first_track.get("description", "")
+                description_ja = first_track.get("description_ja", "")
+                description_en = first_track.get("description_en", "")
+                description = (description_en if ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
                 # MPD のプレイリスト先頭情報を取得して同期（監視ループでの誤検知・自己曲紹介を防止）
                 playlist_items = client.playlistinfo()
@@ -511,15 +519,19 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                     "title": first_title,
                     "artist": first_artist,
                     "file": last_announced_file,
+                    "description_ja": description_ja,
+                    "description_en": description_en,
                 }
                 result["description"] = description
+                result["description_ja"] = description_ja
+                result["description_en"] = description_en
                 result["success"] = True
                 result["needs_playback"] = True
                 result["message"] = f"「{query}」に該当する楽曲 ({len(db_tracks)}曲) をセットしました。"
 
                 print(f"🎵 [moOde] '{query}' の楽曲をセットしました ({added_count}曲 キュー追加, 先頭={last_announced_file})", flush=True)
-                if description:
-                    print(f"📖 [Description 取得成功] {description}", flush=True)
+                if description_ja or description_en:
+                    print(f"📖 [Description 取得成功] (日): {description_ja} | (英): {description_en}", flush=True)
                 else:
                     print(f"ℹ️ [Description] DB内に解説文が見つかりませんでした (title='{first_title}', artist='{first_artist}')", flush=True)
             else:
@@ -560,14 +572,20 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             new_title = new_song.get("title") or (new_file.split("/")[-1] if new_file else "次の曲")
             new_artist = new_song.get("artist") or "アーティスト未設定"
             db_meta = find_track_metadata(file_path=new_file, title=new_title, artist=new_artist)
-            description = db_meta.get("description", "") if db_meta else ""
+            description_ja = db_meta.get("description_ja", "") if db_meta else ""
+            description_en = db_meta.get("description_en", "") if db_meta else ""
+            description = (description_en if ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
             result["track_info"] = {
                 "title": new_title,
                 "artist": new_artist,
                 "file": new_file,
+                "description_ja": description_ja,
+                "description_en": description_en,
             }
             result["description"] = description
+            result["description_ja"] = description_ja
+            result["description_en"] = description_en
 
         elif action == "volume":
             vol = command.get("value", 50)
@@ -869,23 +887,51 @@ GENRE_JA_TO_EN = {
 
 
 # ==================== 英語曲紹介ナレーション & 英語音声合成 ====================
+def clean_english_text_for_speech(text: str, max_chars: int = 250) -> str:
+    """英語読み上げ用にテキストを整形（不要記号や改行の削除、文単位での適切な長さ制限）"""
+    if not text:
+        return ""
+    # 特殊記号や引用符・角括弧のクリーンアップ
+    t = text.replace('"', '').replace('"', '').replace('"', '').replace('`', '').replace('“', '').replace('”', '')
+    t = re.sub(r'[\r\n\t]+', ' ', t)
+    t = re.sub(r'\s+', ' ', t).strip()
+
+    # 句点（. ! ?）で文を分割して長さを調整
+    sentences = re.split(r'(?<=[.!?])\s+', t)
+    result = []
+    curr_len = 0
+    for s in sentences:
+        s = s.strip()
+        if not s:
+            continue
+        if curr_len + len(s) + 1 <= max_chars:
+            result.append(s)
+            curr_len += len(s) + 1
+        else:
+            if not result:
+                result.append(s[:max_chars].rstrip() + ".")
+            break
+    return " ".join(result) if result else t[:max_chars]
+
+
 def build_english_track_announcement(
     track_info: Dict[str, Any],
     is_next: bool = False,
     is_skip: bool = False,
 ) -> str:
-    """曲情報からスマートで自然な英語FMラジオDJ曲紹介文を生成"""
+    """曲情報からスマートで自然な英語FMラジオDJ曲紹介文を生成（description_en を最優先活用）"""
     if not track_info:
         return "Now playing the next track. Enjoy the music." if is_next else "Now playing music."
 
-    title = track_info.get("title") or "Unknown Track"
-    artist = track_info.get("artist") or ""
-    genre = track_info.get("genre") or ""
-    mood = track_info.get("mood") or ""
-    desc = track_info.get("description") or ""
+    title = (track_info.get("title") or "Unknown Track").strip()
+    artist = (track_info.get("artist") or "").strip()
+    genre = (track_info.get("genre") or "").strip()
+    mood = (track_info.get("mood") or "").strip()
+    desc_en = (track_info.get("description_en") or "").strip()
+    desc_ja = (track_info.get("description_ja") or track_info.get("description") or "").strip()
 
     # 日本語/未設定表記のクリーンアップ
-    if artist in ("アーティスト未設定", "Unknown", "", None):
+    if artist in ("アーティスト未設定", "Unknown", "unknown", "None", ""):
         artist = ""
 
     # 英語ジャンル名への変換
@@ -895,7 +941,7 @@ def build_english_track_announcement(
             en_genre = en_g
             break
 
-    # 基本の英語フレーズ
+    # 基本の英語DJプレフィックスフレーズ
     if is_skip:
         base_msg = f"Skipping to '{title}' by {artist}." if artist else f"Skipping to '{title}'."
     elif is_next:
@@ -903,13 +949,21 @@ def build_english_track_announcement(
     else:
         base_msg = f"Now playing: '{title}' by {artist}." if artist else f"Now playing: '{title}'."
 
-    # LLM (Ollama) による英語DJ風解説文の生成（1文・短時間）
-    if desc:
+    # 1. description_en が存在する場合：直接 description_en を結合して流暢に紹介
+    if desc_en:
+        clean_en = clean_english_text_for_speech(desc_en, max_chars=220)
+        if clean_en:
+            announcement = f"{base_msg} {clean_en}"
+            print(f"🎙️ [English DJ ナレーション (description_en)] {announcement}", flush=True)
+            return announcement
+
+    # 2. description_en は無いが description_ja がある場合：LLM (Ollama) で英語DJ紹介文を生成
+    if desc_ja:
         try:
             prompt = (
                 f"You are a sophisticated FM Radio DJ. "
                 f"Write a smooth, natural single-sentence track introduction in English based on: "
-                f"Title: {title}, Artist: {artist}, Genre: {en_genre}, Mood: {mood}, Description: {desc[:200]}. "
+                f"Title: {title}, Artist: {artist}, Genre: {en_genre}, Description: {desc_ja[:150]}. "
                 f"Keep it under 25 words. Output ONLY the single DJ sentence without quotes or preamble."
             )
             payload = {
@@ -923,14 +977,14 @@ def build_english_track_announcement(
             dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
             dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
             if dj_line and len(dj_line) > 10:
-                print(f"🎙️ [English DJ] LLM英語ナレーション生成: '{dj_line}'", flush=True)
+                print(f"🎙️ [English DJ ナレーション (LLM生成)] '{dj_line}'", flush=True)
                 return dj_line
         except Exception:
             pass
 
-    # テンプレートによる補完
+    # 3. テンプレートによる補完
     extra = ""
-    if en_genre:
+    if en_genre and en_genre != "その他":
         extra = f" Enjoy this {en_genre} track."
     elif mood:
         clean_mood = mood.split(",")[0].strip()
@@ -938,7 +992,9 @@ def build_english_track_announcement(
     else:
         extra = " Enjoy the music."
 
-    return f"{base_msg}{extra}"
+    announcement = f"{base_msg}{extra}"
+    print(f"🎙️ [English DJ ナレーション (Template)] {announcement}", flush=True)
+    return announcement
 
 
 def speak_english(text: str):
@@ -1478,9 +1534,13 @@ def run_track_watcher_loop():
             t_title = song.get("title") or "楽曲"
             t_artist = song.get("artist")
             db_meta = find_track_metadata(file_path=cur_file, title=t_title, artist=t_artist)
-            description = db_meta.get("description", "") if db_meta else ""
+            description_ja = db_meta.get("description_ja", "") if db_meta else ""
+            description_en = db_meta.get("description_en", "") if db_meta else ""
+            description = (description_en if ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
             if db_meta:
                 song["description"] = description
+                song["description_ja"] = description_ja
+                song["description_en"] = description_en
                 song["genre"] = db_meta.get("genre", song.get("genre", ""))
                 song["mood"] = db_meta.get("mood", song.get("mood", ""))
 
@@ -1705,33 +1765,68 @@ async def websocket_endpoint(websocket: WebSocket):
 def main():
     global MOODE_IP, MOODE_PORT, AUDIO_OUTPUT_DEV, ANNOUNCE_LANGUAGE
 
-    parser = argparse.ArgumentParser(description="moOde AI Master (Voice & Web Chat Assistant)")
-    parser.add_argument("--moode-ip", type=str, default=MOODE_IP, help="moOde (MPD) IP address")
-    parser.add_argument("--moode-port", type=int, default=MOODE_PORT, help="moOde (MPD) port")
+    parser = argparse.ArgumentParser(
+        description="moOde AI Master (Voice & Web Chat Assistant with DJ Announcements)",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument("--moode-ip", type=str, default=MOODE_IP, help="moOde (MPD) IP address (default: 192.168.68.198)")
+    parser.add_argument("--moode-port", type=int, default=MOODE_PORT, help="moOde (MPD) port (default: 6600)")
     parser.add_argument("--audio-dev", type=str, default=None, help="Audio output ALSA device (e.g. plughw:1,0, default)")
-    parser.add_argument("--lang", type=str, default="en", choices=["en", "ja"], help="Announcement language: en (English DJ) or ja (Japanese)")
-    parser.add_argument("--host", type=str, default="0.0.0.0", help="Web server host")
-    parser.add_argument("--port", type=int, default=8000, help="Web server port")
+    parser.add_argument(
+        "--lang", "-l",
+        type=str,
+        default=None,
+        help="Announcement language: 'en'/'english' (English DJ mode) or 'ja'/'japanese' (Japanese mode) [Default: en]",
+    )
+    parser.add_argument(
+        "--en", "--english",
+        action="store_true",
+        help="Run in English FM DJ announcement mode (reads description_en in English)",
+    )
+    parser.add_argument(
+        "--ja", "--japanese",
+        action="store_true",
+        help="Run in Japanese announcement mode (reads description_ja in Japanese)",
+    )
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Web server host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="Web server port (default: 8000)")
     parser.add_argument("--no-voice", action="store_true", help="Disable microphone voice listener thread")
     args = parser.parse_args()
 
     MOODE_IP = args.moode_ip
     MOODE_PORT = args.moode_port
-    ANNOUNCE_LANGUAGE = args.lang
+
+    # 言語モードの判定
+    if args.ja:
+        ANNOUNCE_LANGUAGE = "ja"
+    elif args.en:
+        ANNOUNCE_LANGUAGE = "en"
+    elif args.lang:
+        lang_val = args.lang.lower().strip()
+        if lang_val in ("ja", "japanese", "jp", "nihongo", "日本語"):
+            ANNOUNCE_LANGUAGE = "ja"
+        elif lang_val in ("en", "english", "eng", "英語"):
+            ANNOUNCE_LANGUAGE = "en"
+        else:
+            print(f"⚠️ 不明な言語指定 '{args.lang}' のため、デフォルトの英語モード (en) を使用します。")
+            ANNOUNCE_LANGUAGE = "en"
+    else:
+        ANNOUNCE_LANGUAGE = "en"  # デフォルト: 英語DJモード
 
     if args.audio_dev:
         AUDIO_OUTPUT_DEV = args.audio_dev
     else:
         AUDIO_OUTPUT_DEV = detect_alsa_output_device(AUDIO_OUTPUT_NAME)
 
-    print("=" * 60)
+    lang_banner = "🎙️ ナレーション: 英語 DJ モード (English - description_en 読み上げ)" if ANNOUNCE_LANGUAGE == "en" else "🎙️ ナレーション: 日本語モード (Japanese - description_ja 読み上げ)"
+    print("=" * 70)
     print(" 🎵 moOde AI Master (Voice & Web Chat Assistant)")
     print(f" 📡 moOde IP   : {MOODE_IP}:{MOODE_PORT}")
     print(f" 🔊 音声出力   : {AUDIO_OUTPUT_DEV}")
-    print(f" 🎙️ ナレーション: {'英語 DJ モード (English)' if ANNOUNCE_LANGUAGE == 'en' else '日本語モード (Japanese)'}")
+    print(f" {lang_banner}")
     print(f" 🌐 Web UI     : http://{args.host}:{args.port} (ブラウザでアクセス)")
     print(f" 🎙️ 音声入力   : {'無効 (--no-voice)' if args.no_voice else '有効 (ヘイ、マスター)'}")
-    print("=" * 60)
+    print("=" * 70)
 
     # 自動トラック変更監視スレッド起動（2曲目以降の自動曲紹介）
     watcher_thread = threading.Thread(target=run_track_watcher_loop, daemon=True)

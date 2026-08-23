@@ -38,20 +38,23 @@ ALLOWED_CATEGORIES = ["邦楽", "洋楽", "その他"]
 
 client = OpenAI(base_url=LEMONADE_BASE_URL, api_key="lemonade", timeout=120.0)
 
-def get_active_model_name() -> str:
+def get_active_model_name(exit_on_error: bool = False) -> str:
     """Lemonade Server でアクティブなモデル名を自動取得"""
     try:
         models = client.models.list()
         if models.data:
             return models.data[0].id
     except Exception as e:
-        print(f"\n[Error] Lemonade Server ({LEMONADE_BASE_URL}) への接続・モデル取得に失敗しました: {e}")
-        print("  Lemonade Server が起動しているか確認してください。")
-        sys.exit(1)
+        if exit_on_error:
+            print(f"\n[Error] Lemonade Server ({LEMONADE_BASE_URL}) への接続・モデル取得に失敗しました: {e}")
+            print("  Lemonade Server が起動しているか確認してください。")
+            sys.exit(1)
+        return "default"
     return "default"
 
-ACTIVE_MODEL = get_active_model_name()
-print(f"[System] 使用モデル: {ACTIVE_MODEL}")
+ACTIVE_MODEL = get_active_model_name(exit_on_error=False)
+if ACTIVE_MODEL != "default":
+    print(f"[System] 使用モデル: {ACTIVE_MODEL}")
 
 def init_db(reset: bool = False):
     try:
@@ -80,7 +83,8 @@ def init_db(reset: bool = False):
             energy_level INTEGER,
             composer TEXT,
             performers TEXT,
-            description TEXT,
+            description_ja TEXT,
+            description_en TEXT,
             analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
@@ -99,6 +103,13 @@ def init_db(reset: bool = False):
             cur.execute("ALTER TABLE tracks ADD COLUMN duration_seconds INTEGER;")
         if "music_category" not in columns:
             cur.execute("ALTER TABLE tracks ADD COLUMN music_category TEXT;")
+        if "description_ja" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN description_ja TEXT;")
+            # 旧descriptionカラムが存在する場合はデータを移行
+            if "description" in columns:
+                cur.execute("UPDATE tracks SET description_ja = description WHERE description_ja IS NULL AND description IS NOT NULL;")
+        if "description_en" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN description_en TEXT;")
         conn.commit()
         return conn
     except Exception as e:
@@ -202,7 +213,8 @@ def parse_key_value(text: str) -> dict:
         "composer": None,
         "performers": None,
         "release_year": None,
-        "description": None
+        "description_ja": None,
+        "description_en": None
     }
     
     # JSON形式で返ってきた場合のフォールバックパース
@@ -236,16 +248,24 @@ def parse_key_value(text: str) -> dict:
                     digits = re.findall(r"\b(19\d\d|20\d\d)\b", str(v))
                     if digits:
                         result["release_year"] = int(digits[0])
+                elif "JA" in k_upper or "JAPANESE" in k_upper or "日本語" in k_upper:
+                    result["description_ja"] = str(v).strip()
+                elif "EN" in k_upper or "ENGLISH" in k_upper or "英語" in k_upper:
+                    result["description_en"] = str(v).strip()
                 elif any(d in k_upper for d in ("DESC", "EXPLAIN", "SUMMARY")):
-                    result["description"] = str(v).strip()
-            if result.get("description"):
+                    if not result.get("description_ja"):
+                        result["description_ja"] = str(v).strip()
+
+            if result.get("description_ja") or result.get("description_en"):
                 return result
     except Exception:
         pass
 
     # 行ごとのパース（全角コロン・マークダウン記号・複数行DESCRIPTION対応）
     current_key = None
-    desc_lines = []
+    desc_ja_lines = []
+    desc_en_lines = []
+    desc_fallback_lines = []
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -258,17 +278,18 @@ def parse_key_value(text: str) -> dict:
         if ":" in normalized_line:
             k_part, v_part = normalized_line.split(":", 1)
             # マークダウン記号や余計な文字を除去
-            clean_k = re.sub(r"[\*\-\#_`]", "", k_part).strip().upper()
+            clean_k = re.sub(r"[\*\-\#`]", "", k_part).strip().upper()
+            k_upper = clean_k.replace("_", "").replace(" ", "")
             v = v_part.strip().strip('"').strip("'")
 
             # 既知のキーか判定
-            if any(term in clean_k for term in ("MUSIC_CATEGORY", "CATEGORY", "区分", "カテゴリ")):
+            if any(term in k_upper for term in ("MUSICCATEGORY", "CATEGORY", "区分", "カテゴリ")):
                 current_key = "MUSIC_CATEGORY"
                 for cat in ALLOWED_CATEGORIES:
                     if cat in v:
                         result["music_category"] = cat
                         break
-            elif "GENRE" in clean_k or "ジャンル" in clean_k:
+            elif "GENRE" in k_upper or "ジャンル" in k_upper:
                 current_key = "GENRE"
                 if v and v.lower() not in ("null", "none", "unknown", "n/a"):
                     matched_genres = [g for g in ALLOWED_GENRES if g in v]
@@ -276,45 +297,67 @@ def parse_key_value(text: str) -> dict:
                         result["genre"] = ", ".join(matched_genres)
                     else:
                         result["genre"] = v if v in ALLOWED_GENRES else "その他"
-            elif "MOOD" in clean_k or "ムード" in clean_k or "気分" in clean_k:
+            elif "MOOD" in k_upper or "ムード" in k_upper or "気分" in k_upper:
                 current_key = "MOOD"
                 if v and v.lower() not in ("null", "none", "unknown", "n/a"):
                     result["mood"] = v
-            elif "ENERGY" in clean_k or "エネルギー" in clean_k:
+            elif "ENERGY" in k_upper or "エネルギー" in k_upper:
                 current_key = "ENERGY_LEVEL"
                 digits = re.findall(r"\d+", v)
                 if digits:
                     result["energy_level"] = max(1, min(5, int(digits[0])))
-            elif "COMPOSER" in clean_k or "作曲" in clean_k:
+            elif "COMPOSER" in k_upper or "作曲" in k_upper:
                 current_key = "COMPOSER"
                 if v and v.lower() not in ("null", "none", "unknown", "n/a"):
                     result["composer"] = v
-            elif "PERFORMER" in clean_k or "演奏" in clean_k or "アーティスト" in clean_k:
+            elif "PERFORMER" in k_upper or "演奏" in k_upper or "アーティスト" in k_upper:
                 current_key = "PERFORMERS"
                 if v and v.lower() not in ("null", "none", "unknown", "n/a"):
                     result["performers"] = v
-            elif "RELEASE_YEAR" in clean_k or "YEAR" in clean_k or "年" in clean_k:
+            elif "RELEASEYEAR" in k_upper or "YEAR" in k_upper or "年" in k_upper:
                 current_key = "RELEASE_YEAR"
                 digits = re.findall(r"\b(19\d\d|20\d\d)\b", v)
                 if digits:
                     result["release_year"] = int(digits[0])
-            elif any(term in clean_k for term in ("DESCRIPTION", "DESC", "説明", "解説", "概要", "紹介")):
-                current_key = "DESCRIPTION"
+            elif any(term in k_upper for term in ("DESCRIPTIONJA", "DESCJA", "日本語説明", "日本語解説", "解説日本語", "説明日本語", "JAPANESE")):
+                current_key = "DESCRIPTION_JA"
                 if v and v.lower() not in ("null", "none", "unknown", "n/a"):
-                    desc_lines.append(v)
+                    desc_ja_lines.append(v)
+            elif any(term in k_upper for term in ("DESCRIPTIONEN", "DESCEN", "英語説明", "英語解説", "解説英語", "説明英語", "ENGLISH")):
+                current_key = "DESCRIPTION_EN"
+                if v and v.lower() not in ("null", "none", "unknown", "n/a"):
+                    desc_en_lines.append(v)
+            elif any(term in k_upper for term in ("DESCRIPTION", "DESC", "説明", "解説", "概要", "紹介")):
+                current_key = "DESCRIPTION_FALLBACK"
+                if v and v.lower() not in ("null", "none", "unknown", "n/a"):
+                    desc_fallback_lines.append(v)
             else:
-                # 不明なキーでかつ直前がDESCRIPTIONの場合は追記
-                if current_key == "DESCRIPTION":
-                    desc_lines.append(line)
+                # 不明なキーでかつ直前がDESCRIPTION系の場合は追記
+                if current_key == "DESCRIPTION_JA":
+                    desc_ja_lines.append(line)
+                elif current_key == "DESCRIPTION_EN":
+                    desc_en_lines.append(line)
+                elif current_key == "DESCRIPTION_FALLBACK":
+                    desc_fallback_lines.append(line)
                 else:
                     current_key = None
         else:
             # コロンを含まない行（改行された説明文など）
-            if current_key == "DESCRIPTION":
-                desc_lines.append(line)
+            if current_key == "DESCRIPTION_JA":
+                desc_ja_lines.append(line)
+            elif current_key == "DESCRIPTION_EN":
+                desc_en_lines.append(line)
+            elif current_key == "DESCRIPTION_FALLBACK":
+                desc_fallback_lines.append(line)
 
-    if desc_lines and not result.get("description"):
-        result["description"] = " ".join(desc_lines).strip()
+    if desc_ja_lines and not result.get("description_ja"):
+        result["description_ja"] = " ".join(desc_ja_lines).strip()
+
+    if desc_en_lines and not result.get("description_en"):
+        result["description_en"] = " ".join(desc_en_lines).strip()
+
+    if desc_fallback_lines and not result.get("description_ja"):
+        result["description_ja"] = " ".join(desc_fallback_lines).strip()
 
     def clean_text_val(val: str) -> str:
         if not val:
@@ -325,20 +368,15 @@ def parse_key_value(text: str) -> dict:
         v = v.strip().strip('"').strip("'").strip()
         return v
 
-    if result.get("mood"):
-        result["mood"] = clean_text_val(result["mood"])
+    for field in ("mood", "composer", "performers"):
+        if result.get(field):
+            result[field] = clean_text_val(result[field])
 
-    if result.get("composer"):
-        result["composer"] = clean_text_val(result["composer"])
-
-    if result.get("performers"):
-        result["performers"] = clean_text_val(result["performers"])
-
-    if result.get("description"):
-        # 末尾の ``` や } を除去
-        desc = re.sub(r'[\s\}\]`]+$', '', result["description"].strip())
-        desc = re.sub(r'^[\s`"]+', '', desc)
-        result["description"] = desc.strip().strip('"').strip("'").strip()
+    for field in ("description_ja", "description_en"):
+        if result.get(field):
+            desc = re.sub(r'[\s\}\]`]+$', '', result[field].strip())
+            desc = re.sub(r'^[\s`"]+', '', desc)
+            result[field] = desc.strip().strip('"').strip("'").strip()
 
     return result
 
@@ -363,18 +401,19 @@ Output strictly a JSON object with these keys:
 - "composer": Composer name or null
 - "performers": Performer names or null
 - "release_year": 4-digit year as integer
-- "description": 1-2 sentences introduction and background of the song written in Japanese (日本語で1〜2文の解説)
+- "description_ja": 1-2 sentences introduction and background of the song written in Japanese (日本語で1〜2文の解説)
+- "description_en": 1-2 sentences introduction and background of the song written in English (英語で1〜2文の解説)
 """
     response = client.chat.completions.create(
         model=ACTIVE_MODEL,
         messages=[
             {
                 "role": "system",
-                "content": "You are a music metadata analysis assistant. You always output valid JSON with a Japanese description."
+                "content": "You are a music metadata analysis assistant. You always output valid JSON with both Japanese and English descriptions."
             },
             {"role": "user", "content": prompt}
         ],
-        max_tokens=600,
+        max_tokens=800,
         temperature=0.1
     )
     raw_content = response.choices[0].message.content or ""
@@ -447,16 +486,18 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
             
             try:
                 meta = enrich_metadata_with_llm(tags, web_context)
-                desc_preview = (meta.get('description')[:30] + '...') if meta.get('description') else 'なし'
-                print(f"  抽出結果: 区分={meta.get('music_category')} | ジャンル={meta.get('genre')} | 気分={meta.get('mood')} | エネルギー={meta.get('energy_level')} | 解説={desc_preview}")
+                desc_ja_prev = (meta.get('description_ja')[:20] + '...') if meta.get('description_ja') else 'なし'
+                desc_en_prev = (meta.get('description_en')[:20] + '...') if meta.get('description_en') else 'なし'
+                print(f"  抽出結果: 区分={meta.get('music_category')} | ジャンル={meta.get('genre')} | 気分={meta.get('mood')} | エネルギー={meta.get('energy_level')} | 解説(日)={desc_ja_prev} | 解説(英)={desc_en_prev}")
                 
                 cur.execute("""
                 INSERT INTO tracks (
                     file_path, relative_path, file_format, is_hires, sample_rate, bit_depth, duration_seconds,
                     title, artist, album,
-                    release_year, music_category, genre, mood, energy_level, composer, performers, description
+                    release_year, music_category, genre, mood, energy_level, composer, performers,
+                    description_ja, description_en
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     full_path,
                     rel_path,
@@ -475,7 +516,8 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                     meta.get("energy_level", 3),
                     meta.get("composer"),
                     meta.get("performers"),
-                    meta.get("description")
+                    meta.get("description_ja"),
+                    meta.get("description_en")
                 ))
                 conn.commit()
                 processed_count += 1

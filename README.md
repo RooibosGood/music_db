@@ -23,7 +23,7 @@ NASなどのストレージに保存された楽曲ファイル（MP3 / FLAC）�
   - 作曲者 (`COMPOSER`)
   - 演奏者・参加アーティスト (`PERFORMERS`)
   - リリース年 (`RELEASE_YEAR`)
-  - **楽曲の概要・背景説明 (`DESCRIPTION` / 日本語)**
+  - **楽曲の概要・背景説明 (`DESCRIPTION_JA` / 日本語解説、`DESCRIPTION_EN` / 英語解説)**
 - **差分更新・リセット対応**: 登録済みファイルをスキップする差分更新と、最初からやり直す全件リセットを切り替え可能
 
 ---
@@ -162,7 +162,8 @@ python cleanup_long_tracks.py --minutes 30
 | `energy_level` | `INTEGER` | エネルギーレベル (1: 静か 〜 5: 非常にエネルギッシュ) |
 | `composer` | `TEXT` | 作曲者 |
 | `performers` | `TEXT` | 演奏者・参加アーティスト |
-| `description` | `TEXT` | **楽曲の背景・解説文（日本語）** |
+| `description_ja` | `TEXT` | **楽曲の背景・解説文（日本語）** |
+| `description_en` | `TEXT` | **楽曲の背景・解説文（英語、FMラジオDJアナウンス用）** |
 | `analyzed_at` | `TIMESTAMP` | 解析・登録日時 |
 
 ---
@@ -176,8 +177,8 @@ Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と 
 - **ハイブリッド操作**: マイクに向かって「ヘイ、マスター、Jazzをかけて」と話しかけても、ブラウザのチャット欄に入力しても即座に反応
 - **リアルタイム双方向同期**: 音声認識された内容・AIの返答・再生中の曲名が WebSocket 経由でブラウザ画面にリアルタイム表示
 - **グラスモフィズム Web UI**: アナログレコードアニメーション、オーディオビジュアライザー、再生/一時停止/スキップ/音量調整、ハイレゾバッジ表示
-- **SQLite DB 連携**: `music_meta.db` のリッチなメタデータ（ムード、エネルギー、ハイレゾ、ジャンル）を活用した選曲
-- **VOICEVOX 音声読み上げ**: Jetson スピーカーからの自然な音声返答（Web UI 上で音声出力のON/OFF切り替え可能）
+- **SQLite DB 連携 & FMラジオDJ曲紹介**: `music_meta.db` のリッチなメタデータ（ムード、エネルギー、ハイレゾ、ジャンル、`description_en` / `description_ja`）を活用した選曲とアナウンス
+- **英語DJモード & 日本語モード**: コマンドライン引数（`--en` / `--ja`）で英語FMラジオDJ風の曲紹介（`description_en` 読み上げ）と日本語モードを自在に切り替え可能
 
 ### 📦 必要パッケージのインストール
 
@@ -185,20 +186,24 @@ Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と 
 pip install fastapi uvicorn websockets python-mpd2 faster-whisper pyaudio pydantic edge-tts
 ```
 
-### 🚀 起動方法
+### 🚀 起動方法（言語選択）
 
 ```bash
-# 1. 英語DJモードで起動 (デフォルト: --lang en, カード0出力)
-python voice_bot.py --audio-dev plughw:0,0
+# 1. 英語DJモードで起動（description_en を英語音声で読み上げ）
+python voice_bot.py --en
+# または
+python voice_bot.py --lang en
 
-# 2. 日本語モードで起動
-python voice_bot.py --audio-dev plughw:0,0 --lang ja
+# 2. 日本語モードで起動（description_ja を VOICEVOX 青山龍星で読み上げ）
+python voice_bot.py --ja
+# または
+python voice_bot.py --lang ja
 
-# 3. ポートや moOde の IP を指定して起動
-python voice_bot.py --moode-ip 192.168.68.198 --port 8000
+# 3. 音声出力デバイスや moOde の IP を指定して起動
+python voice_bot.py --en --audio-dev plughw:0,0 --moode-ip 192.168.68.198
 
 # 4. マイクなし環境 / Web Chat のみで起動
-python voice_bot.py --no-voice
+python voice_bot.py --en --no-voice
 ```
 
 ### 📱 ブラウザからのアクセス

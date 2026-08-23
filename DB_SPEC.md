@@ -43,7 +43,8 @@
 | `energy_level` | `INTEGER` | YES | `3` | `1 <= energy_level <= 5` | エネルギーレベル（1: 静か・穏やか 〜 5: 非常に激しい・高揚） |
 | `composer` | `TEXT` | YES | `NULL` | - | 作曲者名 |
 | `performers` | `TEXT` | YES | `NULL` | - | 演奏者・客演・参加メンバー名 |
-| `description` | `TEXT` | YES | `NULL` | - | **楽曲の概要・歴史・エピソード解説（日本語、1〜2文）** |
+| `description_ja` | `TEXT` | YES | `NULL` | - | **楽曲の概要・歴史・エピソード解説（日本語、1〜2文）** |
+| `description_en` | `TEXT` | YES | `NULL` | - | **楽曲の概要・歴史・エピソード解説（英語、1〜2文）** |
 | `analyzed_at` | `TIMESTAMP` | YES | `CURRENT_TIMESTAMP` | - | メタデータ解析・登録日時 |
 
 ---
@@ -83,8 +84,10 @@
 - `4`: アップテンポでノリの良いロック・ダンスミュージック、ドライブ向け
 - `5`: 非常に激しいハードロック、ハイテンポなEDM、アグレッシブな楽曲
 
-### 3.5 `description`（日本語解説文）
-Web検索結果および音源タグ情報を元に、ローカルLLMが生成した日本語の解説文（1〜2文）です。楽曲の背景、代表曲としての位置づけ、特徴などが記述されており、検索UIでの表示やAIによる楽曲紹介、RAG（Retrieval-Augmented Generation）に活用できます。
+### 3.5 `description_ja` / `description_en`（日本語解説文 / 英語解説文）
+Web検索結果および音源タグ情報を元に、ローカルLLMが生成した解説文（1〜2文）です。楽曲の背景、代表曲としての位置づけ、特徴などが記述されており、検索UIでの表示やAIによる楽曲紹介、英語DJモード、RAG（Retrieval-Augmented Generation）に活用できます。
+- **`description_ja`**: 日本語による解説文（1〜2文）
+- **`description_en`**: 英語による解説文（1〜2文、FMラジオDJアナウンス等に直接利用可能）
 
 ---
 
@@ -157,7 +160,7 @@ ORDER BY artist, album, id;
 
 #### ④ 70年代・80年代の邦楽名曲を検索
 ```sql
-SELECT id, title, artist, release_year, description, relative_path
+SELECT id, title, artist, release_year, description_ja, relative_path
 FROM tracks
 WHERE music_category = '邦楽'
   AND release_year BETWEEN 1970 AND 1989
@@ -166,12 +169,13 @@ ORDER BY release_year ASC;
 
 #### ⑤ 全文あいまい検索（キーワードから曲・解説文を横断検索）
 ```sql
-SELECT id, title, artist, album, genre, description, relative_path
+SELECT id, title, artist, album, genre, description_ja, description_en, relative_path
 FROM tracks
 WHERE title LIKE '%キーワード%'
    OR artist LIKE '%キーワード%'
    OR album LIKE '%キーワード%'
-   OR description LIKE '%キーワード%'
+   OR description_ja LIKE '%キーワード%'
+   OR description_en LIKE '%キーワード%'
 LIMIT 10;
 ```
 
@@ -200,7 +204,8 @@ Columns:
 - duration_seconds (INTEGER): Track length in seconds
 - composer (TEXT): Composer name
 - performers (TEXT): Performers/musicians
-- description (TEXT): Japanese background and introduction
+- description_ja (TEXT): Japanese background and introduction
+- description_en (TEXT): English background and introduction
 - relative_path (TEXT): Relative file path to music file
 ```
 

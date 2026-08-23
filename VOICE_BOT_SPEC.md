@@ -227,15 +227,15 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 
 ### 4.5 音声合成・出力モジュール (`speak_english`, `speak`, `build_english_track_announcement`)
 
-曲紹介アナウンスは **英語DJモード (`--lang en`, デフォルト)** および **日本語モード (`--lang ja`)** に対応しています。
+曲紹介アナウンスは **英語DJモード (`--lang en` / `--en`, デフォルト)** および **日本語モード (`--lang ja` / `--ja`)** に対応しています。
 
-#### 1. 英語DJモード (`build_english_track_announcement`, `speak_english`)
+#### 1. 英語DJモード (`build_english_track_announcement`, `clean_english_text_for_speech`, `speak_english`)
 - **英語DJナレーション生成 (`build_english_track_announcement`)**:
-  - タイトル、アーティスト、ジャンル、ムード、DB解説文（`description`）をもとに、洗練された英語FMラジオDJスタイルのアナウンス文を生成（Ollama `qwen3.5:2b` による1文要約またはテンプレート補完）。
-  - 例: `"Now playing: 'White Room' by Cream. Enjoy this Rock track."`
-  - 例: `"Next up is 'Fly Me To The Moon' by Diana Krall. Enjoy this Jazz track."`
+  - データベース（`music_meta.db`）の **`description_en`（英語解説文）を直接結合**して流暢な英語曲紹介文を生成します。
+  - タイトル、アーティスト、および `description_en` を組み合わせたFMラジオDJスタイル（例: `Now playing: 'White Room' by Cream. 'White Room' is a psychedelic rock classic...` / 次曲: `Next up is '...' by ...` / スキップ: `Skipping to '...' by ...`）。
+  - `description_en` が未設定の場合は、ローカルLLM（Ollama `qwen3.5:2b`）による英語要約またはジャンル・ムードに基づく英語テンプレートで自動補完。
 - **英語音声合成 (`speak_english`)**:
-  - **edge-tts (最優先)**: `en-US-ChristopherNeural` などの超高音質ニューラル音声で再生。
+  - **edge-tts (最優先)**: `en-US-ChristopherNeural` などの超高音質ニューラル音声（FMラジオDJトーン）で再生。
   - **espeak-ng / espeak (オフライン)**: Linux軽量TTSエンジン。
   - **VOICEVOX (フォールバック)**。
 
@@ -478,26 +478,36 @@ stateDiagram-v2
 ## 7. コマンドライン引数 & 起動方法
 
 ### 7.1 引数一覧
-| 引数 | 型 | デフォルト値 | 説明 |
-| :--- | :--- | :--- | :--- |
-| `--moode-ip` | `string` | `192.168.68.198` | moOde audio (Raspberry Pi) の IP アドレス |
-| `--moode-port`| `int` | `6600` | moOde audio の MPD ポート番号 |
-| `--audio-dev` | `string` | `None`（自動検出） | 音声出力先 ALSA デバイス（例: `plughw:1,0`, `default`） |
-| `--host` | `string` | `0.0.0.0` | FastAPI Web サーバーのバインドホスト |
-| `--port` | `int` | `8000` | FastAPI Web サーバーのポート番号 |
-| `--no-voice` | フラグ | `False` | マイク音声リスナースレッドを起動しない（Web専用モード） |
+| 引数 | エイリアス | 型 | デフォルト値 | 説明 |
+| :--- | :--- | :--- | :--- | :--- |
+| `--lang` | `-l` | `string` | `en` | 曲紹介の言語指定 (`en`, `english`, `ja`, `japanese`) |
+| `--en` | `--english` | フラグ | - | **英語DJモード**で起動（`description_en` を英語音声で再生） |
+| `--ja` | `--japanese` | フラグ | - | **日本語モード**で起動（`description_ja` を VOICEVOX で再生） |
+| `--moode-ip` | - | `string` | `192.168.68.198` | moOde audio (Raspberry Pi) の IP アドレス |
+| `--moode-port`| - | `int` | `6600` | moOde audio の MPD ポート番号 |
+| `--audio-dev` | - | `string` | `None`（自動検出） | 音声出力先 ALSA デバイス（例: `plughw:1,0`, `default`） |
+| `--host` | - | `string` | `0.0.0.0` | FastAPI Web サーバーのバインドホスト |
+| `--port` | - | `int` | `8000` | FastAPI Web サーバーのポート番号 |
+| `--no-voice` | - | フラグ | `False` | マイク音声リスナースレッドを起動しない（Web専用モード） |
 
 ### 7.2 起動コマンド例
 
 ```bash
-# 1. 音声 ＋ Web サーバーの通常起動
-python voice_bot.py
+# 1. 英語DJモードで起動（デフォルト: description_en を英語FMラジオDJ風に読み上げ）
+python voice_bot.py --en
+# または
+python voice_bot.py --lang en
 
-# 2. moOdeのIPとWebポートを変更して起動
-python voice_bot.py --moode-ip 192.168.1.50 --port 8080
+# 2. 日本語モードで起動（description_ja を VOICEVOX 青山龍星で読み上げ）
+python voice_bot.py --ja
+# または
+python voice_bot.py --lang ja
 
-# 3. マイク不要・Web UI のみで起動（開発環境やマイク非接続時）
-python voice_bot.py --no-voice
+# 3. moOdeのIPとWebポートを変更して英語DJモード起動
+python voice_bot.py --en --moode-ip 192.168.1.50 --port 8080
+
+# 4. マイク不要・Web UI のみで起動（開発環境やマイク非接続時）
+python voice_bot.py --en --no-voice
 ```
 
 ---
