@@ -396,18 +396,63 @@ DEFAULT_COVER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="300" heigh
 </svg>"""
 
 
+def clean_album_or_artist_for_search(text: str) -> str:
+    """iTunes / Deezer 検索用に [Disc 1], (Remastered) などの付加文字列を除去"""
+    if not text:
+        return ""
+    t = re.sub(r"\[.*?\]", "", text)
+    t = re.sub(r"\(.*?\)", "", t)
+    t = re.sub(r"【.*?】", "", t)
+    t = re.sub(r"\b(disc|disk|cd|remaster|remastered|version|edition|vol|volume|deluxe|bonus|mono|stereo|live)\b.*$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
 def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = "", title: str = "") -> Tuple[bytes, str]:
-    """MPD / moOde Web / iTunes API / デフォルトSVG からアルバムジャケット画像を取得"""
+    """MPD / ローカルフォルダー / moOde Web / iTunes API / Deezer API からアルバムジャケット画像を取得"""
     cache_key = f"{song_file}::{artist}::{album}::{title}"
     if cache_key in cover_art_cache:
         return cover_art_cache[cache_key]
 
-    # 1. MPD albumart コマンド (MPD 0.21+ / python-mpd2)
+    # 0. DBからの正確なメタデータ補完
+    db_meta = find_track_metadata(file_path=song_file, title=title, artist=artist)
+    if db_meta:
+        if not artist or artist in ("アーティスト未設定", "Unknown", "unknown"):
+            artist = db_meta.get("artist") or artist
+        if not album or album in ("moOde Audio Library", "Unknown", "unknown"):
+            album = db_meta.get("album") or album
+        if not title or title in ("未選択", "Unknown", "unknown"):
+            title = db_meta.get("title") or title
+        db_file_path = db_meta.get("file_path", "")
+    else:
+        db_file_path = ""
+
+    # 1. ローカル/NASの音楽フォルダ内の画像ファイル直接探索 (cover.jpg, folder.jpg 等)
+    for target_path in [song_file, db_file_path]:
+        if target_path:
+            norm = target_path.replace("\\", "/")
+            dir_path = os.path.dirname(norm)
+            if dir_path and os.path.isdir(dir_path):
+                for img_name in ["cover.jpg", "folder.jpg", "front.jpg", "album.jpg", "artwork.jpg", "cover.png", "folder.png", "front.png"]:
+                    full_img_path = os.path.join(dir_path, img_name)
+                    if os.path.isfile(full_img_path) and os.path.getsize(full_img_path) > 1000:
+                        try:
+                            with open(full_img_path, "rb") as f:
+                                img_bytes = f.read()
+                            media_type = "image/png" if img_name.endswith(".png") else "image/jpeg"
+                            ret = (img_bytes, media_type)
+                            cover_art_cache[cache_key] = ret
+                            return ret
+                        except Exception:
+                            pass
+
+    # 2. MPD albumart / readpicture コマンド
     if song_file and MPDClient is not None:
         try:
             client = get_mpd_client()
             if client:
                 try:
+                    # 2-1. albumart
                     res = client.albumart(song_file, 0)
                     if isinstance(res, dict) and "binary" in res:
                         img_data = bytearray(res["binary"])
@@ -424,7 +469,7 @@ def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = ""
                 except Exception:
                     pass
 
-                # 2. MPD readpicture コマンド (ID3埋め込み画像)
+                # 2-2. readpicture (ID3タグ埋め込み画像)
                 try:
                     res = client.readpicture(song_file, 0)
                     if isinstance(res, dict) and "binary" in res:
@@ -454,33 +499,43 @@ def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = ""
     if song_file and MOODE_IP:
         try:
             quoted_file = urllib.parse.quote(song_file)
-            cover_url = f"http://{MOODE_IP}/coverart.php?file={quoted_file}"
-            req = urllib.request.Request(cover_url, headers={"User-Agent": "moOde-AI/1.0"})
-            with urllib.request.urlopen(req, timeout=2.0) as resp:
-                if resp.status == 200:
-                    content_type = resp.headers.get("Content-Type", "image/jpeg")
-                    img_bytes = resp.read()
-                    if len(img_bytes) > 500 and "image" in content_type:
-                        ret = (img_bytes, content_type)
-                        cover_art_cache[cache_key] = ret
-                        return ret
+            for url_fmt in [
+                f"http://{MOODE_IP}/coverart.php?file={quoted_file}",
+                f"http://{MOODE_IP}/coverart.php/{quoted_file}",
+            ]:
+                try:
+                    req = urllib.request.Request(url_fmt, headers={"User-Agent": "moOde-AI/1.0"})
+                    with urllib.request.urlopen(req, timeout=1.5) as resp:
+                        if resp.status == 200:
+                            content_type = resp.headers.get("Content-Type", "image/jpeg")
+                            img_bytes = resp.read()
+                            if len(img_bytes) > 1000 and "image" in content_type:
+                                ret = (img_bytes, content_type)
+                                cover_art_cache[cache_key] = ret
+                                return ret
+                except Exception:
+                    pass
         except Exception:
             pass
 
-    # 4. iTunes Search API (高画質ジャケット画像の検索)
-    search_term = ""
-    if artist and artist not in ("アーティスト未設定", "Unknown", "unknown") and album and album not in ("moOde Audio Library", "Unknown", "unknown"):
-        search_term = f"{artist} {album}"
-    elif artist and artist not in ("アーティスト未設定", "Unknown", "unknown") and title and title not in ("未選択", "Unknown"):
-        search_term = f"{artist} {title}"
-    elif album and album not in ("moOde Audio Library", "Unknown"):
-        search_term = album
+    # 4. iTunes Search API (クリーンアップ正規化クエリで超高画質 600x600 取得)
+    clean_art = clean_album_or_artist_for_search(artist)
+    clean_alb = clean_album_or_artist_for_search(album)
+    clean_tit = clean_album_or_artist_for_search(title)
 
-    if search_term:
+    queries = []
+    if clean_art and clean_alb and clean_art not in ("アーティスト未設定", "Unknown"):
+        queries.append(f"{clean_art} {clean_alb}")
+    if clean_art and clean_tit and clean_art not in ("アーティスト未設定", "Unknown"):
+        queries.append(f"{clean_art} {clean_tit}")
+    if clean_alb and clean_alb not in ("moOde Audio Library", "Unknown"):
+        queries.append(clean_alb)
+
+    for q in queries:
         try:
-            itunes_url = f"https://itunes.apple.com/search?term={urllib.parse.quote(search_term)}&entity=album&limit=1"
-            req = urllib.request.Request(itunes_url, headers={"User-Agent": "Mozilla/5.0 moOde-AI/1.0"})
-            with urllib.request.urlopen(req, timeout=3.0) as resp:
+            itunes_url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=album&limit=1"
+            req = urllib.request.Request(itunes_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 moOde-AI/1.0"})
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
                 res_json = json.loads(resp.read().decode("utf-8"))
                 results = res_json.get("results", [])
                 if results:
@@ -488,7 +543,7 @@ def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = ""
                     if art_url:
                         hi_art_url = art_url.replace("100x100bb.jpg", "600x600bb.jpg")
                         req_art = urllib.request.Request(hi_art_url, headers={"User-Agent": "Mozilla/5.0"})
-                        with urllib.request.urlopen(req_art, timeout=3.0) as art_resp:
+                        with urllib.request.urlopen(req_art, timeout=2.5) as art_resp:
                             img_bytes = art_resp.read()
                             if len(img_bytes) > 500:
                                 ret = (img_bytes, "image/jpeg")
@@ -497,7 +552,29 @@ def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = ""
         except Exception:
             pass
 
-    # 5. デフォルト SVG
+    # 5. Deezer Music API (iTunes で見つからない楽曲のフォールバック)
+    for q in queries:
+        try:
+            dz_url = f"https://api.deezer.com/search?q={urllib.parse.quote(q)}&limit=1"
+            req = urllib.request.Request(dz_url, headers={"User-Agent": "Mozilla/5.0 moOde-AI/1.0"})
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                res_json = json.loads(resp.read().decode("utf-8"))
+                data = res_json.get("data", [])
+                if data:
+                    album_info = data[0].get("album", {})
+                    cover_url = album_info.get("cover_xl") or album_info.get("cover_big") or album_info.get("cover_medium")
+                    if cover_url:
+                        req_cov = urllib.request.Request(cover_url, headers={"User-Agent": "Mozilla/5.0"})
+                        with urllib.request.urlopen(req_cov, timeout=2.5) as cov_resp:
+                            img_bytes = cov_resp.read()
+                            if len(img_bytes) > 500:
+                                ret = (img_bytes, "image/jpeg")
+                                cover_art_cache[cache_key] = ret
+                                return ret
+        except Exception:
+            pass
+
+    # 6. デフォルト SVG
     return (DEFAULT_COVER_SVG.encode("utf-8"), "image/svg+xml")
 
 
