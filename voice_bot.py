@@ -815,6 +815,9 @@ def clean_text_for_speech(text: str, max_chars: int = 120) -> str:
     # 特殊記号や重複括弧の除去
     t = text.replace("《", "").replace("》", "").replace("『", "「").replace("』", "」")
     t = re.sub(r"[【】\[\]\(\)]", " ", t)
+    # moOde を日本語で自然に「モード」と発音
+    t = re.sub(r"\bmo+de\b", "モード", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bmoOde\b", "モード", t)
     # 先頭の不自然なゴミ文字（「S「〜や数字等）をクリーンアップ
     t = re.sub(r"^「[A-Za-z0-9]「", "「", t)
     t = re.sub(r"^1(\d{3}年代)", r"\1", t)
@@ -837,6 +840,11 @@ def clean_text_for_speech(text: str, max_chars: int = 120) -> str:
 
 # 英語・音楽用語のカタカナ発音辞書
 ENGLISH_KATAKANA_DICT = {
+    # システム・プレイヤー名
+    "moode audio": "モード・オーディオ",
+    "moode ai": "モード・エーアイ",
+    "moode": "モード",
+
     # 代表的アーティスト・バンド名
     "cream": "クリーム",
     "the beatles": "ザ・ビートルズ",
@@ -1053,6 +1061,9 @@ def clean_english_text_for_speech(text: str, max_chars: int = 250) -> str:
     t = text.replace('"', '').replace('"', '').replace('"', '').replace('`', '').replace('“', '').replace('”', '')
     t = re.sub(r'[\r\n\t]+', ' ', t)
     t = re.sub(r'\s+', ' ', t).strip()
+    # moOde は英語音声合成エンジンで "mode" と発音
+    t = re.sub(r"\bmo+de\b", "mode", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bmoOde\b", "mode", t)
 
     # 句点（. ! ?）で文を分割して長さを調整
     sentences = re.split(r'(?<=[.!?])\s+', t)
@@ -1161,10 +1172,14 @@ def speak_english(text: str):
     if not text:
         return
 
+    # moOde は英語音声合成エンジンで "mode" と発音
+    speech_text = re.sub(r"\bmo+de\b", "mode", text, flags=re.IGNORECASE)
+    speech_text = re.sub(r"\bmoOde\b", "mode", speech_text)
+
     with voice_lock:
         is_speaking_event.set()
         started_at = time.monotonic()
-        print(f"\n🎙️ [English DJ] ネイティブ英語読み上げ開始: '{text}'", flush=True)
+        print(f"\n🎙️ [English DJ] ネイティブ英語読み上げ開始: '{text}' (発音用: '{speech_text}')", flush=True)
 
         temp_dir = "/tmp" if os.name != "nt" else os.environ.get("TEMP", ".")
         temp_raw_wav = os.path.join(temp_dir, "voice_reply_raw.wav")
@@ -1190,7 +1205,7 @@ def speak_english(text: str):
             if edge_tts is not None:
                 try:
                     async def _gen_edge_tts():
-                        communicate = edge_tts.Communicate(text, ENGLISH_VOICE)
+                        communicate = edge_tts.Communicate(speech_text, ENGLISH_VOICE)
                         await communicate.save(temp_mp3)
                     asyncio.run(_gen_edge_tts())
                     if os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 200:
@@ -1203,7 +1218,7 @@ def speak_english(text: str):
                 cmd_py = [
                     sys.executable, "-m", "edge_tts",
                     "--voice", ENGLISH_VOICE,
-                    "--text", text,
+                    "--text", speech_text,
                     "--write-media", temp_mp3,
                 ]
                 res_py = subprocess.run(cmd_py, capture_output=True, timeout=12)
@@ -1220,7 +1235,7 @@ def speak_english(text: str):
                     cmd_cli = [
                         "edge-tts",
                         "--voice", ENGLISH_VOICE,
-                        "--text", text,
+                        "--text", speech_text,
                         "--write-media", temp_mp3,
                     ]
                     res_cli = subprocess.run(cmd_cli, capture_output=True, timeout=12)
@@ -1241,7 +1256,7 @@ def speak_english(text: str):
         if not tts_success:
             try:
                 print("🎙️ [English DJ] 2. Google Translate TTS (ゼロ依存 ネイティブ英語) を試行中...", flush=True)
-                if fetch_google_tts_audio(text, lang="en", output_file=temp_mp3):
+                if fetch_google_tts_audio(speech_text, lang="en", output_file=temp_mp3):
                     if play_mp3_or_wav_audio(temp_mp3, temp_raw_wav, temp_padded_wav):
                         tts_success = True
                         print("🎉 [English DJ] Google TTS ネイティブ英語音声の再生完了！", flush=True)
@@ -1256,7 +1271,7 @@ def speak_english(text: str):
                 if shutil.which(espeak_cmd):
                     try:
                         print(f"🎙️ [English DJ] 3. {espeak_cmd} (オフライン英語) で音声生成中...", flush=True)
-                        res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "140", "-w", temp_raw_wav, text], capture_output=True)
+                        res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "140", "-w", temp_raw_wav, speech_text], capture_output=True)
                         if res.returncode == 0 and os.path.exists(temp_raw_wav):
                             add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
                             if play_wav_file(temp_padded_wav):
@@ -1271,7 +1286,7 @@ def speak_english(text: str):
         # =========================================================================
         if not tts_success and os.name == "nt":
             try:
-                ps_cmd = f'Add-Type -AssemblyName System.speech; $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speak.Speak("{text}")'
+                ps_cmd = f'Add-Type -AssemblyName System.speech; $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speak.Speak("{speech_text}")'
                 subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, timeout=10)
                 tts_success = True
             except Exception:
