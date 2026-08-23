@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -380,6 +381,32 @@ def add_db_tracks_to_mpd(client: Any, db_tracks: List[Dict[str, Any]]) -> List[D
 
 # ==================== アルバムジャケット画像 (Cover Art) 取得 ====================
 cover_art_cache: Dict[str, Tuple[bytes, str]] = {}
+moode_default_cover_hash: Optional[str] = None  # moOde デフォルトジャケット画像のMD5ハッシュ
+
+
+def get_moode_default_cover_hash() -> Optional[str]:
+    """moOde の coverart.php がカバー未発見時に返すデフォルト画像のMD5ハッシュを取得（キャッシュ）
+
+    moOde の coverart.php は、カバー画像が存在しない場合でも HTTP 200 で
+    デフォルトジャケット画像を返す仕様のため、それを検出してスキップするために使用する。
+    """
+    global moode_default_cover_hash
+    if moode_default_cover_hash is not None:
+        return moode_default_cover_hash
+    if not MOODE_IP:
+        return None
+    try:
+        url = f"http://{MOODE_IP}/coverart.php?file=__nonexistent_track_for_default_probe__.xyz"
+        req = urllib.request.Request(url, headers={"User-Agent": "moOde-AI/1.0"})
+        with urllib.request.urlopen(req, timeout=2.0) as resp:
+            if resp.status == 200:
+                data = resp.read()
+                if len(data) > 100:
+                    moode_default_cover_hash = hashlib.md5(data).hexdigest()
+                    print(f"🖼️ [Cover Art] moOde デフォルトジャケット検出 (MD5: {moode_default_cover_hash[:8]}...)", flush=True)
+    except Exception as e:
+        print(f"⚠️ [Cover Art] moOde デフォルト画像のプローブ失敗: {e}", flush=True)
+    return moode_default_cover_hash
 
 DEFAULT_COVER_SVG = """<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
   <defs>
@@ -498,6 +525,7 @@ def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = ""
     # 3. moOde Web サーバーの coverart.php
     if song_file and MOODE_IP:
         try:
+            default_hash = get_moode_default_cover_hash()
             quoted_file = urllib.parse.quote(song_file)
             for url_fmt in [
                 f"http://{MOODE_IP}/coverart.php?file={quoted_file}",
@@ -510,6 +538,10 @@ def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = ""
                             content_type = resp.headers.get("Content-Type", "image/jpeg")
                             img_bytes = resp.read()
                             if len(img_bytes) > 1000 and "image" in content_type:
+                                # moOde デフォルトジャケット画像（カバー未発見時のフォールバック）ならスキップ
+                                if default_hash and hashlib.md5(img_bytes).hexdigest() == default_hash:
+                                    print("🖼️ [Cover Art] coverart.php はデフォルト画像を返却 → スキップ", flush=True)
+                                    continue
                                 ret = (img_bytes, content_type)
                                 cover_art_cache[cache_key] = ret
                                 return ret

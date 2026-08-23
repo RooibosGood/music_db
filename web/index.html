@@ -1612,7 +1612,7 @@
           title: song.title || '',
           file: song.file || '',
         });
-        const coverUrl = `/api/player/cover?${coverParams.toString()}`;
+        const coverUrl = `/api/player/cover?${coverParams.toString()}&_=${Date.now()}`;
         if (albumCoverSleeve) {
           albumCoverSleeve.style.opacity = '0.4';
           albumCoverSleeve.src = coverUrl;
