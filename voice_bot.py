@@ -1559,13 +1559,14 @@ def broadcast_process_status(step: str, detail: str, auto_idle_sec: Optional[flo
 
 
 def broadcast_status():
-    """現在の moOde 再生状態、音声ステータス、および処理ステータスをプッシュ"""
+    """現在の moOde 再生状態、音声ステータス、処理ステータス、および言語モードをプッシュ"""
     status = get_moode_status()
     broadcast_event({
         "type": "status_update",
         "player_status": status,
         "voice_status": voice_state,
         "process_status": current_processing_state,
+        "language": ANNOUNCE_LANGUAGE,
     })
 
 
@@ -1831,7 +1832,7 @@ def run_track_watcher_loop():
 
 
 def play_startup_greeting():
-    """起動時の初期案内アナウンス（英語/日本語モード連動）"""
+    """起動時の初期案内アナウンス（英語/日本語モード連動・Webチャット画面にも表示）"""
     try:
         if ANNOUNCE_LANGUAGE == "en":
             greeting = (
@@ -1839,15 +1840,35 @@ def play_startup_greeting():
                 "Say 'Hey Master' to request a song, or use the web chat below to play your favorite music."
             )
             print(f"🎙️ [Greeting] 起動案内 (English): '{greeting}'", flush=True)
-            broadcast_process_status("tts", "🎙️ 起動案内を発話中...")
+            msg_record = {
+                "sender": "assistant",
+                "text": greeting,
+                "source": "system",
+                "action": "greeting",
+                "timestamp": time.strftime("%H:%M:%S"),
+            }
+            chat_history.append(msg_record)
+            broadcast_event({"type": "chat_message", "message": msg_record})
+
+            broadcast_process_status("tts", "🎙️ Speaking startup greeting...")
             speak_english(greeting)
-            broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
+            broadcast_process_status("idle", "🎙️ Ready for voice commands ('Hey Master')")
         else:
             greeting = (
                 "こんにちは！moOde AI アシスタントです。"
                 "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
             )
             print(f"🎙️ [Greeting] 起動案内 (Japanese): '{greeting}'", flush=True)
+            msg_record = {
+                "sender": "assistant",
+                "text": greeting,
+                "source": "system",
+                "action": "greeting",
+                "timestamp": time.strftime("%H:%M:%S"),
+            }
+            chat_history.append(msg_record)
+            broadcast_event({"type": "chat_message", "message": msg_record})
+
             broadcast_process_status("tts", "🎙️ 起動案内を発話中...")
             speak(greeting)
             broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
@@ -1978,6 +1999,8 @@ async def api_status():
         "player_status": player_status,
         "voice_status": voice_state,
         "moode_ip": f"{MOODE_IP}:{MOODE_PORT}",
+        "language": ANNOUNCE_LANGUAGE,
+        "llm_model": LLM_MODEL,
     })
 
 

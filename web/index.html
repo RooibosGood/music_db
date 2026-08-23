@@ -1075,7 +1075,7 @@
       </div>
 
       <!-- Quick Action Chips -->
-      <div class="chips-container">
+      <div class="chips-container" id="chipsContainer">
         <button class="chip-btn" onclick="sendQuickPrompt('Jazzをかけて')">🎷 ジャズを再生</button>
         <button class="chip-btn" onclick="sendQuickPrompt('落ち着いたリラックスできる曲をかけて')">☕ カフェ・リラックス</button>
         <button class="chip-btn" onclick="sendQuickPrompt('テンポの良いロックを流して')">🎸 ノリの良いロック</button>
@@ -1109,14 +1109,14 @@
 
       <!-- Messages Timeline -->
       <div class="chat-messages" id="chatMessages">
-        <div class="message assistant">
+        <div class="message assistant" id="initialGreetingMsg">
           <div class="msg-avatar">🤖</div>
           <div class="msg-content">
-            <div class="msg-bubble">
+            <div class="msg-bubble" id="initialGreetingText">
               こんにちは！moOde AI アシスタントです。<br>
               マイクに向かって<strong>「ヘイ、マスター」</strong>と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。
             </div>
-            <div class="msg-source-tag">🤖 System Initialized</div>
+            <div class="msg-source-tag" id="initialGreetingSource">🤖 System Initialized</div>
           </div>
         </div>
       </div>
@@ -1359,11 +1359,75 @@
       };
     }
 
+    // Language Mode Elements
+    let currentLang = 'ja';
+    const initialGreetingText = document.getElementById('initialGreetingText');
+    const initialGreetingSource = document.getElementById('initialGreetingSource');
+    const chipsContainer = document.getElementById('chipsContainer');
+
+    function updateLanguageMode(lang) {
+      if (!lang) return;
+      currentLang = lang;
+
+      if (lang === 'en') {
+        if (initialGreetingText) {
+          initialGreetingText.innerHTML = `Hello! This is your moOde AI Assistant.<br>Say <strong>"Hey Master"</strong> to request a song, or use the web chat below to play your favorite music.`;
+        }
+        if (initialGreetingSource) {
+          initialGreetingSource.textContent = '🤖 English DJ Mode Active';
+        }
+        if (chatInput) {
+          chatInput.placeholder = 'e.g. "Play Jazz", "Play Eric Clapton", "Turn up volume"...';
+        }
+        if (chipsContainer) {
+          chipsContainer.innerHTML = `
+            <button class="chip-btn" onclick="sendQuickPrompt('Play Jazz')">🎷 Play Jazz</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('Play relaxing cafe music')">☕ Relaxing Cafe</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('Play upbeat rock')">🎸 Upbeat Rock</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('Play 80s Japanese pop')">📼 80s Pop</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('Play Hi-Res audio tracks')">💎 Hi-Res Audio</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('Stop music')">⏹️ Stop</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('Next track')">⏭️ Skip</button>
+          `;
+        }
+        if (voiceListenerText && !soundBars.classList.contains('listening')) {
+          voiceListenerText.textContent = '🎙️ Waiting for voice command ("Hey Master")';
+        }
+        if (processDetailText && !processTracker.classList.contains('active')) {
+          processDetailText.textContent = '🎙️ Waiting for voice command ("Hey Master")';
+        }
+      } else {
+        if (initialGreetingText) {
+          initialGreetingText.innerHTML = `こんにちは！moOde AI アシスタントです。<br>マイクに向かって<strong>「ヘイ、マスター」</strong>と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。`;
+        }
+        if (initialGreetingSource) {
+          initialGreetingSource.textContent = '🤖 System Initialized';
+        }
+        if (chatInput) {
+          chatInput.placeholder = '例: 「Jazzをかけて」「ビートルズを再生して」「音量を上げて」...';
+        }
+        if (chipsContainer) {
+          chipsContainer.innerHTML = `
+            <button class="chip-btn" onclick="sendQuickPrompt('Jazzをかけて')">🎷 ジャズを再生</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('落ち着いたリラックスできる曲をかけて')">☕ カフェ・リラックス</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('テンポの良いロックを流して')">🎸 ノリの良いロック</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('80年代の邦楽をかけて')">📼 80年代 邦楽</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('ハイレゾ音源の曲をかけて')">💎 ハイレゾ音源</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('音楽を止めて')">⏹️ 停止</button>
+            <button class="chip-btn" onclick="sendQuickPrompt('次の曲にして')">⏭️ スキップ</button>
+          `;
+        }
+      }
+    }
+
     // Handle incoming events from Server
     function handleServerEvent(data) {
       if (data.type === 'status_update') {
         updatePlayerUI(data.player_status);
         updateVoiceStatus(data.voice_status);
+        if (data.language) {
+          updateLanguageMode(data.language);
+        }
         if (data.process_status) {
           updateProcessStatus(data.process_status);
         }
@@ -1719,8 +1783,17 @@
       try {
         const res = await fetch('/api/status');
         const data = await res.json();
+        if (data.language) {
+          updateLanguageMode(data.language);
+        }
         if (data.player_status) {
           updatePlayerUI(data.player_status);
+        }
+        if (data.voice_status) {
+          updateVoiceStatus(data.voice_status);
+        }
+        if (data.process_status) {
+          updateProcessStatus(data.process_status);
         }
       } catch (e) {
         console.warn('Initial status fetch failed:', e);
@@ -1737,6 +1810,9 @@
         const data = await res.json();
         if (data.player_status) {
           updatePlayerUI(data.player_status);
+        }
+        if (data.language) {
+          updateLanguageMode(data.language);
         }
       } catch (e) {}
     }, 2500);
