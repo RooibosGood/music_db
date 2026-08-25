@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Dict, Optional, Tuple
 
-from db import find_track_metadata
+from .db import find_track_metadata
 
 from . import config
 

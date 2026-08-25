@@ -13,7 +13,7 @@ import time
 import traceback
 from typing import Any, Dict, Optional
 
-from db import add_db_tracks_to_mpd, find_track_metadata, search_tracks_from_db
+from .db import add_db_tracks_to_mpd, find_track_metadata, search_tracks_from_db
 
 from . import config
 

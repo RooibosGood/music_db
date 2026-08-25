@@ -124,9 +124,9 @@ Audio_SQL/
 │   ├── api.py              # FastAPI Web アプリケーション & REST/WebSocket エンドポイント
 │   ├── main.py             # CLI 引数解析、モジュール設定同期、スレッド起動オーケストレーション
 │   ├── coverart.py         # アルバムジャケット画像取得（MPD/Web/iTunes API）
+│   ├── db.py               # 楽曲メタデータ DB アクセス層（検索・照合・キュー追加）
 │   ├── mpd_client.py       # moOde / MPD 制御・操作 & 再生状態取得
 │   └── tts.py              # 音声合成・出力（英語 edge-tts / 日本語 VOICEVOX）
-├── db.py                   # 楽曲メタデータ DB アクセス層（検索・照合・キュー追加）
 ├── build_music_db.py       # 楽曲メタデータ抽出・DB構築バッチ
 ├── cleanup_long_tracks.py  # 長尺音源クリーンアップバッチ
 ├── music_meta.db           # 楽曲メタデータ SQLite データベース

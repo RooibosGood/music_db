@@ -1,7 +1,7 @@
 """moOde 音声ボット トラック監視・自動曲紹介モジュール。"""
 
 import time
-from db import find_track_metadata
+from .db import find_track_metadata
 from . import config
 from . import mpd_client
 from . import state

@@ -10,7 +10,7 @@ import random
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "music_meta.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "music_meta.db")
 
 # ランダム選曲の重複防止用（直近に再生した楽曲IDを保持）
 recent_played_track_ids: List[int] = []
