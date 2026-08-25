@@ -3,8 +3,8 @@
 NASなどのストレージに保存された楽曲ファイル（MP3 / FLAC）からタグ情報（ID3 / Vorbis）を抽出し、Web検索とLLM（Lemonade Server）を活用してリッチなメタデータ（ジャンル、ムード、エネルギーレベル、日本語の楽曲説明など）を生成して SQLite データベースに蓄積するツールです。
 
 > 📖 **関連仕様書ドキュメント**:
-> - データベース設計・SQL活用例: [DB_SPEC.md](DB_SPEC.md)
-> - 音声＆Web AIアシスタント仕様書: [VOICE_BOT_SPEC.md](VOICE_BOT_SPEC.md)
+> - データベース設計・SQL活用例: [doc/DB_SPEC.md](doc/DB_SPEC.md)
+> - 音声＆Web AIアシスタント仕様書: [doc/VOICE_BOT_SPEC.md](doc/VOICE_BOT_SPEC.md)
 
 ---
 
