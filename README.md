@@ -168,7 +168,7 @@ python cleanup_long_tracks.py --minutes 30
 
 ---
 
-## moOde 音声 & Web Chat AI システム (`voice_bot.py`)
+## moOde 音声 & Web Chat AI システム (`voice_bot/`)
 
 Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と **Webブラウザ（スマホ・PC）からのチャット入力** の双方から Raspberry Pi 5 上の moOde audio (MPD) をシームレスに操作・音楽再生できるAIアシスタントです。  
 > 📖 **詳細なシステム仕様・API・プロトコル定義**: [VOICE_BOT_SPEC.md](VOICE_BOT_SPEC.md) をご覧ください。
@@ -192,18 +192,18 @@ pip install fastapi uvicorn websockets python-mpd2 faster-whisper pyaudio pydant
 # 1. 英語DJモードで起動（description_en を英語音声で読み上げ）
 python voice_bot.py --en
 # または
-python voice_bot.py --lang en
+python -m voice_bot --lang en
 
 # 2. 日本語モードで起動（description_ja を VOICEVOX 青山龍星で読み上げ）
 python voice_bot.py --ja
 # または
-python voice_bot.py --lang ja
+python -m voice_bot --lang ja
 
 # 3. 音声出力デバイスや moOde の IP を指定して起動
-python voice_bot.py --en --audio-dev plughw:0,0 --moode-ip 192.168.68.198
+python -m voice_bot --en --audio-dev plughw:0,0 --moode-ip 192.168.68.198
 
 # 4. マイクなし環境 / Web Chat のみで起動
-python voice_bot.py --en --no-voice
+python -m voice_bot --en --no-voice
 ```
 
 ### 📱 ブラウザからのアクセス

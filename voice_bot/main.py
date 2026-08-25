@@ -1,10 +1,4 @@
-"""互換起動用エントリーポイント。"""
-
-from voice_bot.main import main
-
-
-if __name__ == "__main__":
-    main()
+import argparse
 import asyncio
 import io
 import json
@@ -24,13 +18,13 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 # 分割モジュール (db.py / coverart.py / mpd_client.py / tts.py)
-import coverart
-import mpd_client
-import tts
-from coverart import get_album_cover_bytes
+from . import coverart
+from . import mpd_client
+from . import tts
+from .coverart import get_album_cover_bytes
 from db import find_track_metadata
-from mpd_client import control_moode, get_moode_status
-from tts import (
+from .mpd_client import control_moode, get_moode_status
+from .tts import (
     build_english_track_announcement,
     clean_text_for_speech,
     detect_alsa_output_device,
@@ -813,7 +807,8 @@ class ControlRequest(BaseModel):
 
 @app.get("/")
 async def get_index():
-    index_path = os.path.join(os.path.dirname(__file__), "web", "index.html")
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    index_path = os.path.join(project_root, "web", "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return JSONResponse({"message": "moOde AI Master Backend is running."})

@@ -561,7 +561,13 @@ python voice_bot.py --en --no-voice
 
 ```text
 Audio_SQL/
-├── voice_bot.py            # メインシステム実行ファイル（FastAPI + STT + TTS + MPD）
+├── voice_bot.py            # 互換起動用エントリーポイント
+├── voice_bot/              # 音声ボット本体パッケージ
+│   ├── __main__.py         # python -m voice_bot 用エントリー
+│   ├── main.py             # メインシステム（FastAPI + STT + TTS + MPD）
+│   ├── coverart.py         # アルバムジャケット取得
+│   ├── mpd_client.py       # MPD 制御
+│   └── tts.py              # 音声合成・出力
 ├── build_music_db.py       # 楽曲メタデータ抽出・DB構築バッチ
 ├── cleanup_long_tracks.py  # 20分以上の長尺音源クリーンアップ
 ├── music_meta.db           # 楽曲メタデータ SQLite データベース
