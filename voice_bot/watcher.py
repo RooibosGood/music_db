@@ -128,17 +128,7 @@ def run_track_watcher_loop():
                 announce_text = tts.build_english_track_announcement(song, is_next=True)
                 print(f"🎙️ [Watcher 英語曲紹介] {announce_text}", flush=True)
             else:
-                clean_desc = tts.clean_text_for_speech(description, max_chars=100)
-                if clean_desc:
-                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                        announce_text = f"続いては、『{t_title}』、{t_artist}です。{clean_desc}"
-                    else:
-                        announce_text = f"続いては、『{t_title}』です。{clean_desc}"
-                else:
-                    if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                        announce_text = f"続いては、『{t_title}』、{t_artist}をお送りします。"
-                    else:
-                        announce_text = f"続いては、『{t_title}』をお送りします。"
+                announce_text = tts.build_japanese_track_announcement(song, description=description, prefix="続いては、")
                 print(f"📖 [Watcher 自動曲紹介] {announce_text}", flush=True)
 
             # チャット履歴・Web UI にもプッシュ
@@ -175,5 +165,5 @@ def run_track_watcher_loop():
                 except Exception as e:
                     print(f"⚠️ [moOde] 再生再開エラー: {e}")
 
-        except Exception as e:
+        except Exception:
             time.sleep(2.0)

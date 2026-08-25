@@ -5,7 +5,6 @@ import threading
 import uvicorn
 
 from . import config
-from . import coverart
 from . import mpd_client
 from . import tts
 from .api import app
@@ -99,22 +98,14 @@ def main():
     else:
         config.ANNOUNCE_LANGUAGE = "en"  # デフォルト: 英語DJモード
 
-    # 各モジュールへ設定値を同期
-    coverart.MOODE_IP = config.MOODE_IP
-    coverart.MOODE_PORT = config.MOODE_PORT
-
-    mpd_client.MOODE_IP = config.MOODE_IP
-    mpd_client.MOODE_PORT = config.MOODE_PORT
-    mpd_client.ANNOUNCE_LANGUAGE = config.ANNOUNCE_LANGUAGE
+    # broadcaster 関数のみ注入（broadcaster → mpd_client の循環 import 回避のため）
+    # 設定値は各モジュールが config を直接参照するため同期不要
     mpd_client.broadcast_process_status = broadcast_process_status
 
-    tts.LLM_MODEL = config.LLM_MODEL
-
     if args.audio_dev:
-        tts.AUDIO_OUTPUT_DEV = args.audio_dev
+        config.AUDIO_OUTPUT_DEV = args.audio_dev
     else:
-        tts.AUDIO_OUTPUT_DEV = tts.detect_alsa_output_device(config.AUDIO_OUTPUT_NAME)
-    config.AUDIO_OUTPUT_DEV = tts.AUDIO_OUTPUT_DEV
+        config.AUDIO_OUTPUT_DEV = tts.detect_alsa_output_device(config.AUDIO_OUTPUT_NAME)
 
     lang_banner = (
         "🎙️ ナレーション: 英語 DJ モード (English - description_en 読み上げ)"
@@ -125,7 +116,7 @@ def main():
     print(" 🎵 moOde AI Master (Voice & Web Chat Assistant)")
     print(f" 📡 moOde IP   : {config.MOODE_IP}:{config.MOODE_PORT}")
     print(f" 🤖 LLM モデル : {config.LLM_MODEL} (Ollama)")
-    print(f" 🔊 音声出力   : {tts.AUDIO_OUTPUT_DEV}")
+    print(f" 🔊 音声出力   : {config.AUDIO_OUTPUT_DEV}")
     print(f" {lang_banner}")
     print(f" 🌐 Web UI     : http://{args.host}:{args.port} (ブラウザでアクセス)")
     print(f" 🎙️ 音声入力   : {'無効 (--no-voice)' if args.no_voice else '有効 (ヘイ、マスター)'}")

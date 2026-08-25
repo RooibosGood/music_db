@@ -187,14 +187,17 @@ def run_voice_loop():
             state.voice_state["state"] = "idle"
             broadcast_event({"type": "voice_event", "event": "idle"})
 
+            state.voice_state["is_listening"] = True
+            state.voice_state["state"] = "listening"
+            broadcast_event({"type": "voice_event", "event": "listening"})
+
             audio_data = record_audio_stream()
             if not audio_data:
                 time.sleep(0.5)
                 continue
 
-            state.voice_state["is_listening"] = True
             state.voice_state["state"] = "recognizing"
-            broadcast_event({"type": "voice_event", "event": "listening"})
+            broadcast_event({"type": "voice_event", "event": "recognizing"})
             broadcast_process_status("stt", "🎙️ 音声を文字起こし中 (Whisper)...")
 
             wake_text = speech_to_text(audio_data)

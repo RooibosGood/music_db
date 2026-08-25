@@ -5,8 +5,7 @@ voice_bot.py から切り出し。
 - 英語: edge-tts / Google TTS / espeak-ng / SAPI (speak_english)
 - 出力デバイス: ALSA 自動検出・ffmpeg / mpg123 / mpv / ffplay フォールバック再生
 
-音声出力先・接続先・共有ロックなどは voice_bot.main() の起動時に
-tts モジュールへ同期される想定（循環 import 回避のため値・参照の注入方式）。
+設定値は config モジュールを直接参照する。
 """
 import asyncio
 import io
@@ -28,18 +27,10 @@ try:
 except ImportError:
     edge_tts = None
 
-# voice_bot.main() から同期される設定値
-VOICEVOX_URL = "http://localhost:50021"
-SPEAKER_ID = 13  # 青山龍星（落ち着いた男性音声）
-LLM_MODEL = "qwen2.5:1.5b"
-OLLAMA_CHAT_URL = "http://localhost:11434/api/chat"
-ENGLISH_VOICE = "en-US-ChristopherNeural"  # 英語ラジオDJ風ニューラル音声 (edge-tts)
-AUDIO_OUTPUT_NAME = "Sennheiser"  # 再生デバイス名（部分一致で自動検索）
-AUDIO_OUTPUT_DEV = None  # Noneの場合は自動検出、または "plughw:1,0" 等
-VOICE_PRE_SILENCE_SEC = 0.3  # 再生開始時の音切れ防止用
+# 設定値は config モジュールを直接参照する
+from . import config
 
-# 発話排他制御・発話中フラグ。voice_bot から threading オブジェクトの参照を注入する。
-# 注入前でも独立動作できるようローカルに初期化しておく。
+# 発話排他制御・発話中フラグ。
 import threading
 voice_lock = threading.Lock()
 is_speaking_event = threading.Event()
@@ -92,12 +83,11 @@ def detect_alsa_output_device(target_name: str = "Sennheiser") -> str:
 
 def play_wav_file(wav_path: str, target_dev: Optional[str] = None) -> bool:
     """ALSA aplay / Windows winsound で WAV ファイルを安全・確実に再生（自動フォールバック対応）"""
-    global AUDIO_OUTPUT_DEV
     if not os.path.exists(wav_path) or os.path.getsize(wav_path) < 100:
         print(f"⚠️ [play_wav_file] WAVファイルが無効または空です: {wav_path}", flush=True)
         return False
 
-    dev = target_dev or AUDIO_OUTPUT_DEV or detect_alsa_output_device(AUDIO_OUTPUT_NAME)
+    dev = target_dev or config.AUDIO_OUTPUT_DEV or detect_alsa_output_device(config.AUDIO_OUTPUT_NAME)
     if os.name != "nt":
         print(f"🔊 [aplay] 再生中 (デバイス: {dev}, ファイル: {wav_path})...", flush=True)
         # 1. 指定または検出した ALSA デバイスで再生
@@ -131,8 +121,10 @@ def play_wav_file(wav_path: str, target_dev: Optional[str] = None) -> bool:
             return False
 
 
-def add_silence_padding_to_wav(source_wav_path: str, output_wav_path: str, silence_sec: float = VOICE_PRE_SILENCE_SEC) -> bool:
+def add_silence_padding_to_wav(source_wav_path: str, output_wav_path: str, silence_sec: Optional[float] = None) -> bool:
     """WAVファイルの先頭に無音フレームを付加してスピーカー（Sennheiser SP 20等）の頭切れ・音切れを防止"""
+    if silence_sec is None:
+        silence_sec = config.VOICE_PRE_SILENCE_SEC
     try:
         with wave.open(source_wav_path, "rb") as source_wav:
             params = source_wav.getparams()
@@ -190,7 +182,7 @@ def fetch_google_tts_audio(text: str, lang: str = "en", output_file: str = "/tmp
 
 def play_mp3_or_wav_audio(mp3_path: str, raw_wav_path: str, padded_wav_path: str) -> bool:
     """MP3 ファイルを ALSA (Sennheiser SP 20 / default) から確実にネイティブ音声再生"""
-    target_dev = AUDIO_OUTPUT_DEV or detect_alsa_output_device(AUDIO_OUTPUT_NAME)
+    target_dev = config.AUDIO_OUTPUT_DEV or detect_alsa_output_device(config.AUDIO_OUTPUT_NAME)
 
     # 1. ffmpeg で WAV 変換 ➔ 無音パディング付加 ➔ aplay
     if shutil.which("ffmpeg") and os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 100:
@@ -199,7 +191,7 @@ def play_mp3_or_wav_audio(mp3_path: str, raw_wav_path: str, padded_wav_path: str
             capture_output=True, timeout=6
         )
         if conv.returncode == 0 and os.path.exists(raw_wav_path):
-            add_silence_padding_to_wav(raw_wav_path, padded_wav_path, silence_sec=VOICE_PRE_SILENCE_SEC)
+            add_silence_padding_to_wav(raw_wav_path, padded_wav_path, silence_sec=config.VOICE_PRE_SILENCE_SEC)
             if play_wav_file(padded_wav_path, target_dev):
                 return True
 
@@ -207,7 +199,7 @@ def play_mp3_or_wav_audio(mp3_path: str, raw_wav_path: str, padded_wav_path: str
     if shutil.which("mpg123") and os.path.exists(mp3_path) and os.path.getsize(mp3_path) > 100:
         conv = subprocess.run(["mpg123", "-w", raw_wav_path, mp3_path], capture_output=True, timeout=6)
         if conv.returncode == 0 and os.path.exists(raw_wav_path):
-            add_silence_padding_to_wav(raw_wav_path, padded_wav_path, silence_sec=VOICE_PRE_SILENCE_SEC)
+            add_silence_padding_to_wav(raw_wav_path, padded_wav_path, silence_sec=config.VOICE_PRE_SILENCE_SEC)
             if play_wav_file(padded_wav_path, target_dev):
                 return True
         # mpg123 直接再生
@@ -398,7 +390,7 @@ def convert_english_to_katakana(text: str) -> str:
     # 2. Ollama (LLM) による文脈カタカナ化
     try:
         payload = {
-            "model": LLM_MODEL,
+            "model": config.LLM_MODEL,
             "messages": [
                 {
                     "role": "system",
@@ -420,7 +412,7 @@ def convert_english_to_katakana(text: str) -> str:
                 "num_predict": 128,
             },
         }
-        res_json = _http_post_json(OLLAMA_CHAT_URL, payload, timeout=4.0)
+        res_json = _http_post_json(config.OLLAMA_CHAT_URL, payload, timeout=4.0)
         llm_reply = res_json.get("message", {}).get("content", "").strip()
         llm_reply = re.sub(r"<think>[\s\S]*?</think>", "", llm_reply).strip()
         llm_reply = llm_reply.replace("```", "").replace("\n", " ").strip()
@@ -435,7 +427,6 @@ def convert_english_to_katakana(text: str) -> str:
 
 def speak(text: str):
     """VOICEVOX ➔ aplay で Jetson スピーカーから音声出力（英語のカタカナ化対応）"""
-    global AUDIO_OUTPUT_DEV
     if not text:
         return
 
@@ -450,13 +441,13 @@ def speak(text: str):
         try:
             # 1. audio_query (タイムアウトを十分に確保)
             encoded_text = urllib.parse.quote(text)
-            query_url = f"{VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={SPEAKER_ID}"
+            query_url = f"{config.VOICEVOX_URL}/audio_query?text={encoded_text}&speaker={config.SPEAKER_ID}"
             req_q = urllib.request.Request(query_url, data=b"", headers={"User-Agent": "moOde-AI/1.0"}, method="POST")
             with urllib.request.urlopen(req_q, timeout=30) as res_q:
                 query_data = res_q.read()
 
             # 2. synthesis (長文でも耐えられるよう timeout=60 に設定)
-            synth_url = f"{VOICEVOX_URL}/synthesis?speaker={SPEAKER_ID}"
+            synth_url = f"{config.VOICEVOX_URL}/synthesis?speaker={config.SPEAKER_ID}"
             req_s = urllib.request.Request(
                 synth_url,
                 data=query_data,
@@ -470,7 +461,7 @@ def speak(text: str):
             with wave.open(io.BytesIO(wav_bytes), "rb") as source_wav:
                 with wave.open(temp_wav, "wb") as output_wav:
                     output_wav.setparams(source_wav.getparams())
-                    silence_frames = int(source_wav.getframerate() * VOICE_PRE_SILENCE_SEC)
+                    silence_frames = int(source_wav.getframerate() * config.VOICE_PRE_SILENCE_SEC)
                     output_wav.writeframes(
                         b"\0" * silence_frames * source_wav.getnchannels() * source_wav.getsampwidth()
                     )
@@ -480,7 +471,7 @@ def speak(text: str):
             play_wav_file(temp_wav)
             print(f"🔊 [VOICEVOX] 音声出力完了（{time.monotonic() - started_at:.1f}秒）", flush=True)
         except urllib.error.URLError as url_err:
-            print(f"❌ [VOICEVOX] 接続エラー ({VOICEVOX_URL}): {url_err}")
+            print(f"❌ [VOICEVOX] 接続エラー ({config.VOICEVOX_URL}): {url_err}")
             print("💡 VOICEVOX (ポート 50021) が Jetson 上で起動しているか確認してください。")
         except Exception as e:
             print(f"❌ [VOICEVOX] 発話処理エラー: {e}")
@@ -578,12 +569,12 @@ def build_english_track_announcement(
                 f"Keep it under 25 words. Output ONLY the single DJ sentence without quotes or preamble."
             )
             payload = {
-                "model": LLM_MODEL,
+                "model": config.LLM_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "options": {"num_ctx": 1024, "temperature": 0.3, "num_predict": 48},
             }
-            res = _http_post_json(OLLAMA_CHAT_URL, payload, timeout=2.5)
+            res = _http_post_json(config.OLLAMA_CHAT_URL, payload, timeout=2.5)
             dj_line = res.get("message", {}).get("content", "").strip()
             dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
             dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
@@ -608,9 +599,29 @@ def build_english_track_announcement(
     return announcement
 
 
+def build_japanese_track_announcement(
+    track_info: dict,
+    description: str = "",
+    prefix: str = "",
+) -> str:
+    """曲情報から日本語の曲紹介文を生成（description_ja を活用・llm.py / watcher.py 共通）"""
+    t_title = (track_info.get("title") or "楽曲").strip()
+    t_artist = (track_info.get("artist") or "").strip()
+    desc = description or track_info.get("description") or track_info.get("description_ja") or ""
+    clean_desc = clean_text_for_speech(desc, max_chars=100)
+
+    has_artist = t_artist and t_artist not in ("アーティスト未設定", "Unknown", "unknown")
+    if clean_desc:
+        if has_artist:
+            return f"{prefix}『{t_title}』（{t_artist}）を再生します。{clean_desc}"
+        return f"{prefix}『{t_title}』を再生します。{clean_desc}"
+    if has_artist:
+        return f"{prefix}『{t_title}』（{t_artist}）を再生します。"
+    return f"{prefix}『{t_title}』を再生します。"
+
+
 def speak_english(text: str):
     """英語テキストを Jetson スピーカーからネイティブ英語音声で出力 (edge-tts / Google TTS / espeak-ng)"""
-    global AUDIO_OUTPUT_DEV
     if not text:
         return
 
@@ -642,12 +653,12 @@ def speak_english(text: str):
         # エンジン 1: edge-tts (Microsoft 超高音質ニューラル英語ラジオDJボイス)
         # =========================================================================
         try:
-            print(f"🎙️ [English DJ] 1. Microsoft edge-tts 音声合成を試行中... (ボイス: {ENGLISH_VOICE})", flush=True)
+            print(f"🎙️ [English DJ] 1. Microsoft edge-tts 音声合成を試行中... (ボイス: {config.ENGLISH_VOICE})", flush=True)
             # 1-1. Python モジュールとしての edge_tts 呼び出し
             if edge_tts is not None:
                 try:
                     async def _gen_edge_tts():
-                        communicate = edge_tts.Communicate(speech_text, ENGLISH_VOICE)
+                        communicate = edge_tts.Communicate(speech_text, config.ENGLISH_VOICE)
                         await communicate.save(temp_mp3)
                     asyncio.run(_gen_edge_tts())
                     if os.path.exists(temp_mp3) and os.path.getsize(temp_mp3) > 200:
@@ -659,7 +670,7 @@ def speak_english(text: str):
             if not os.path.exists(temp_mp3) or os.path.getsize(temp_mp3) < 200:
                 cmd_py = [
                     sys.executable, "-m", "edge_tts",
-                    "--voice", ENGLISH_VOICE,
+                    "--voice", config.ENGLISH_VOICE,
                     "--text", speech_text,
                     "--write-media", temp_mp3,
                 ]
@@ -676,7 +687,7 @@ def speak_english(text: str):
                 if shutil.which("edge-tts"):
                     cmd_cli = [
                         "edge-tts",
-                        "--voice", ENGLISH_VOICE,
+                        "--voice", config.ENGLISH_VOICE,
                         "--text", speech_text,
                         "--write-media", temp_mp3,
                     ]
@@ -715,7 +726,7 @@ def speak_english(text: str):
                         print(f"🎙️ [English DJ] 3. {espeak_cmd} (オフライン英語) で音声生成中...", flush=True)
                         res = subprocess.run([espeak_cmd, "-v", "en-us", "-s", "140", "-w", temp_raw_wav, speech_text], capture_output=True)
                         if res.returncode == 0 and os.path.exists(temp_raw_wav):
-                            add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=VOICE_PRE_SILENCE_SEC)
+                            add_silence_padding_to_wav(temp_raw_wav, temp_padded_wav, silence_sec=config.VOICE_PRE_SILENCE_SEC)
                             if play_wav_file(temp_padded_wav):
                                 tts_success = True
                                 print(f"🎉 [English DJ] {espeak_cmd} ネイティブ英語音声の再生完了！", flush=True)

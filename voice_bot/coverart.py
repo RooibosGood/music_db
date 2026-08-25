@@ -3,9 +3,7 @@
 voice_bot.py から切り出し。
 MPD (albumart/readpicture) / ローカルフォルダー / moOde Web (coverart.php) /
 iTunes Search API / Deezer API の順でカバー画像を探索する。
-
-MOODE_IP / MOODE_PORT は voice_bot.main() の CLI 引数に合わせて
-``coverart.MOODE_IP = ...`` のように起動時に上書きされる想定。
+接続先は config モジュールを直接参照する。
 """
 import hashlib
 import json
@@ -17,14 +15,12 @@ from typing import Any, Dict, Optional, Tuple
 
 from db import find_track_metadata
 
+from . import config
+
 try:
     from mpd import MPDClient
 except ImportError:
     MPDClient = None
-
-# moOde (MPD) 接続先。voice_bot.main() から同期される。
-MOODE_IP = "192.168.68.198"
-MOODE_PORT = 6600
 
 cover_art_cache: Dict[str, Tuple[bytes, str]] = {}
 moode_default_cover_hash: Optional[str] = None  # moOde デフォルトジャケット画像のMD5ハッシュ
@@ -37,7 +33,7 @@ def _get_mpd_client() -> Optional[Any]:
     try:
         client = MPDClient()
         client.timeout = 5
-        client.connect(MOODE_IP, MOODE_PORT)
+        client.connect(config.MOODE_IP, config.MOODE_PORT)
         return client
     except Exception:
         return None
@@ -52,10 +48,10 @@ def get_moode_default_cover_hash() -> Optional[str]:
     global moode_default_cover_hash
     if moode_default_cover_hash is not None:
         return moode_default_cover_hash
-    if not MOODE_IP:
+    if not config.MOODE_IP:
         return None
     try:
-        url = f"http://{MOODE_IP}/coverart.php?file=__nonexistent_track_for_default_probe__.xyz"
+        url = f"http://{config.MOODE_IP}/coverart.php?file=__nonexistent_track_for_default_probe__.xyz"
         req = urllib.request.Request(url, headers={"User-Agent": "moOde-AI/1.0"})
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             if resp.status == 200:
@@ -182,13 +178,13 @@ def get_album_cover_bytes(song_file: str = "", artist: str = "", album: str = ""
             pass
 
     # 3. moOde Web サーバーの coverart.php
-    if song_file and MOODE_IP:
+    if song_file and config.MOODE_IP:
         try:
             default_hash = get_moode_default_cover_hash()
             quoted_file = urllib.parse.quote(song_file)
             for url_fmt in [
-                f"http://{MOODE_IP}/coverart.php?file={quoted_file}",
-                f"http://{MOODE_IP}/coverart.php/{quoted_file}",
+                f"http://{config.MOODE_IP}/coverart.php?file={quoted_file}",
+                f"http://{config.MOODE_IP}/coverart.php/{quoted_file}",
             ]:
                 try:
                     req = urllib.request.Request(url_fmt, headers={"User-Agent": "moOde-AI/1.0"})

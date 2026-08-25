@@ -71,6 +71,7 @@ async def api_status():
     return JSONResponse({
         "player_status": player_status,
         "voice_status": state.voice_state,
+        "process_status": state.current_processing_state,
         "moode_ip": f"{config.MOODE_IP}:{config.MOODE_PORT}",
         "language": config.ANNOUNCE_LANGUAGE,
         "llm_model": config.LLM_MODEL,
@@ -132,6 +133,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "type": "status_update",
                     "player_status": mpd_client.get_moode_status(),
                     "voice_status": state.voice_state,
+                    "process_status": state.current_processing_state,
+                    "language": config.ANNOUNCE_LANGUAGE,
                 },
                 ensure_ascii=False,
             )

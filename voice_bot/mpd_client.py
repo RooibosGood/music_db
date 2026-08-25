@@ -5,9 +5,9 @@ voice_bot.py から切り出し。
 - get_moode_status: 再生ステータスと現在曲情報の取得
 - control_moode: 選曲・再生・停止・スキップ・音量などの操作
 
-MOODE_IP / MOODE_PORT / ANNOUNCE_LANGUAGE / broadcast_process_status は
-voice_bot.main() の起動時に mpd_client モジュールへ同期される想定
-（循環 import 回避のため値・参照の注入方式）。
+設定値は config モジュールを直接参照する。
+broadcast_process_status のみ voice_bot.main() の起動時に注入される想定
+（broadcaster → mpd_client の循環 import 回避のため）。
 """
 import time
 import traceback
@@ -15,15 +15,12 @@ from typing import Any, Dict, Optional
 
 from db import add_db_tracks_to_mpd, find_track_metadata, search_tracks_from_db
 
+from . import config
+
 try:
     from mpd import MPDClient
 except ImportError:
     MPDClient = None
-
-# voice_bot.main() から同期される設定値
-MOODE_IP = "192.168.68.198"
-MOODE_PORT = 6600
-ANNOUNCE_LANGUAGE = "en"
 
 # 処理ステータス通知関数（voice_bot から注入される。None の場合は print のみ）
 broadcast_process_status = None
@@ -46,7 +43,7 @@ def get_mpd_client() -> Optional[Any]:
     try:
         client = MPDClient()
         client.timeout = 5
-        client.connect(MOODE_IP, MOODE_PORT)
+        client.connect(config.MOODE_IP, config.MOODE_PORT)
         return client
     except Exception as e:
         return None
@@ -87,7 +84,7 @@ def get_moode_status() -> Dict[str, Any]:
         db_meta = find_track_metadata(file_path=song_file, title=song_title, artist=song_artist)
         description_ja = db_meta.get("description_ja", "") if db_meta else ""
         description_en = db_meta.get("description_en", "") if db_meta else ""
-        description = (description_en if ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
+        description = (description_en if config.ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
         song_info = {
             "title": song_title,
@@ -145,8 +142,8 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
 
     client = get_mpd_client()
     if client is None:
-        print(f"❌ [moOde] {MOODE_IP}:{MOODE_PORT} に接続できませんでした。", flush=True)
-        result["message"] = f"moOde ({MOODE_IP}) に接続できませんでした。"
+        print(f"❌ [moOde] {config.MOODE_IP}:{config.MOODE_PORT} に接続できませんでした。", flush=True)
+        result["message"] = f"moOde ({config.MOODE_IP}) に接続できませんでした。"
         return result
 
     global last_announced_file, last_announced_songid
@@ -171,7 +168,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 first_file = first_track.get("relative_path", "")
                 description_ja = first_track.get("description_ja", "")
                 description_en = first_track.get("description_en", "")
-                description = (description_en if ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
+                description = (description_en if config.ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
                 # MPD のプレイリスト先頭情報を取得して同期（監視ループでの誤検知・自己曲紹介を防止）
                 playlist_items = client.playlistinfo()
@@ -248,7 +245,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             db_meta = find_track_metadata(file_path=new_file, title=new_title, artist=new_artist)
             description_ja = db_meta.get("description_ja", "") if db_meta else ""
             description_en = db_meta.get("description_en", "") if db_meta else ""
-            description = (description_en if ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
+            description = (description_en if config.ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
             result["track_info"] = {
                 "title": new_title,

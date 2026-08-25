@@ -142,22 +142,8 @@ def process_user_message(
             reply_text = tts.build_english_track_announcement(track_info, is_next=False, is_skip=is_skip)
             print(f"🎙️ [English DJ ナレーション] {reply_text}", flush=True)
         else:
-            t_title = track_info.get("title") or "楽曲"
-            t_artist = track_info.get("artist")
-            clean_desc = tts.clean_text_for_speech(description, max_chars=100)
             prefix = "次の曲、" if cmd.get("action") == "next" else ("前の曲、" if cmd.get("action") == "previous" else "")
-
-            if clean_desc:
-                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                    reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。{clean_desc}"
-                else:
-                    reply_text = f"{prefix}『{t_title}』を再生します。{clean_desc}"
-            else:
-                if t_artist and t_artist != "アーティスト未設定" and t_artist != "Unknown":
-                    reply_text = f"{prefix}『{t_title}』（{t_artist}）を再生します。"
-                else:
-                    reply_text = f"{prefix}『{t_title}』を再生します。"
-
+            reply_text = tts.build_japanese_track_announcement(track_info, description=description, prefix=prefix)
             print(f"📖 [音声案内テキスト] {reply_text}", flush=True)
 
     # 4. 音声読み上げと moOde 音楽再生の順序制御（解説文を話し終えてから再生）
