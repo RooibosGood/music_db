@@ -35,64 +35,72 @@
 
 ### 2.1 全体構成図
 
-```mermaid
-flowchart TB
-    subgraph Client Layer ["ユーザー操作層"]
-        MIC["🎙️ マイク入力 (Sennheiser SP 20)"]
-        WEB["📱 Webブラウザ (PC / スマホ UI)"]
-    end
+```plantuml
+@startuml
+!theme plain
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultFontName "sans-serif"
+skinparam packagePadding 12
+skinparam nodePadding 12
 
-    subgraph Edge Layer ["Jetson Orin Nano Super (voice_bot)"]
-        subgraph Input Module ["音声・通信受付 (stt.py / api.py)"]
-            STT["faster-whisper (STT)<br/>Small / CPU int8"]
-            WAKE["ウェイクワード判定<br/>「ヘイ、マスター」"]
-            API_ROUTER["FastAPI Router<br/>REST & WebSocket"]
-        end
+package "ユーザー操作層 (Client Layer)" as client_layer {
+    actor "🎙️ マイク入力\n(Sennheiser SP 20)" as MIC
+    actor "📱 Webブラウザ\n(PC / スマホ UI)" as WEB
+}
 
-        subgraph Core Engine ["Core Processing Engine (llm.py)"]
-            LLM_PARSER["Ollama (LLM)<br/>意図解析 / JSON Mode<br/>(qwen2.5:1.5b)"]
-            FALLBACK["ルールベース判定<br/>(フォールバック)"]
-            DISPATCHER["moOde コントローラ<br/>(mpd_client.py)"]
-        end
+package "Jetson Orin Nano Super (voice_bot) - Edge Layer" as edge_layer {
+    package "音声・通信受付 (stt.py / api.py)" as input_module {
+        component "faster-whisper (STT)\nSmall / CPU int8" as STT
+        component "ウェイクワード判定\n「ヘイ、マスター」" as WAKE
+        component "FastAPI Router\nREST & WebSocket" as API_ROUTER
+    }
 
-        subgraph Background Watcher ["再生監視 (watcher.py)"]
-            TRACK_WATCHER["Track Watcher Loop<br/>(2曲目以降の自動解説)"]
-        end
+    package "Core Processing Engine (llm.py)" as core_engine {
+        component "Ollama (LLM)\n意図解析 / JSON Mode\n(qwen2.5:1.5b)" as LLM_PARSER
+        component "ルールベース判定\n(フォールバック)" as FALLBACK
+        component "moOde コントローラ\n(mpd_client.py)" as DISPATCHER
+    }
 
-        subgraph Data & Voice Module ["データ & 音声合成 (db.py / tts.py / coverart.py)"]
-            DB[("SQLite<br/>music_meta.db")]
-            TTS["TTS エンジン<br/>英語: edge-tts<br/>日本語: VOICEVOX"]
-            ALSA["aplay / オーディオ出力"]
-        end
-    end
+    package "再生監視 (watcher.py)" as background_watcher {
+        component "Track Watcher Loop\n(2曲目以降の自動解説)" as TRACK_WATCHER
+    }
 
-    subgraph Audio Player Layer ["Raspberry Pi 5 (moOde audio)"]
-        MPD["moOde MPD サーバー<br/>Port: 6600"]
-        AUDIO_OUT["🔊 オーディオ出力 / DAC / アンプ"]
-    end
+    package "データ & 音声合成 (db.py / tts.py / coverart.py)" as data_voice_module {
+        database "SQLite\nmusic_meta.db" as DB
+        component "TTS エンジン\n英語: edge-tts\n日本語: VOICEVOX" as TTS
+        component "aplay / オーディオ出力" as ALSA
+    }
+}
 
-    %% Flow connections
-    MIC -->|PCM 16kHz| STT
-    STT --> WAKE
-    WAKE -->|発話テキスト| Core Engine
-    WEB -->|HTTP POST /api/chat| API_ROUTER
-    API_ROUTER -->|テキスト| Core Engine
+package "Raspberry Pi 5 (moOde audio) - Audio Player Layer" as player_layer {
+    component "moOde MPD サーバー\nPort: 6600" as MPD
+    component "🔊 オーディオ出力\nDAC / アンプ" as AUDIO_OUT
+}
 
-    LLM_PARSER -.->|失敗時| FALLBACK
-    Core Engine --> LLM_PARSER
-    Core Engine --> DISPATCHER
+' フロー接続
+MIC --> STT : PCM 16kHz
+STT --> WAKE
+WAKE --> LLM_PARSER : 発話テキスト
+WEB --> API_ROUTER : HTTP POST /api/chat
+API_ROUTER --> LLM_PARSER : テキスト
 
-    DISPATCHER -->|MPD Protocol| MPD
-    MPD --> AUDIO_OUT
-    DISPATCHER <-->|メタデータ & 解説文検索| DB
-    TRACK_WATCHER <-->|再生追跡 & 解説取得| MPD
-    TRACK_WATCHER <-->|メタデータ検索| DB
-    TRACK_WATCHER -->|自動曲紹介| TTS
+LLM_PARSER ..> FALLBACK : 失敗時
+LLM_PARSER --> DISPATCHER : 意図解析結果
+FALLBACK --> DISPATCHER
 
-    Core Engine -->|解説文付き返答| TTS
-    TTS -->|音声出力| ALSA
+DISPATCHER --> MPD : MPD Protocol
+MPD --> AUDIO_OUT
+DISPATCHER <--> DB : メタデータ & 解説文検索
+TRACK_WATCHER <--> MPD : 再生追跡 & 解説取得
+TRACK_WATCHER <--> DB : メタデータ検索
+TRACK_WATCHER --> TTS : 自動曲紹介
 
-    API_ROUTER <==>|WebSocket 状態同期・進行配信| WEB
+LLM_PARSER --> TTS : 解説文付き返答
+TTS --> ALSA : 音声出力
+
+API_ROUTER <==> WEB : WebSocket 状態同期・進行配信
+@enduml
 ```
 
 ---
@@ -268,19 +276,24 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 バックグラウンドスレッドで常時マイク入力を監視します。
 
 #### 動作サイクル
-```mermaid
-stateDiagram-v2
-    [*] --> StartupGreeting: 起動
-    StartupGreeting --> Idle: 起動案内アナウンス
-    Idle --> Recording: マイク録音 (4秒間)
-    Recording --> Recognizing: faster-whisper (STT)
-    Recognizing --> WakeWordCheck: テキスト判定
-    WakeWordCheck --> Idle: ウェイクワード不一致 / 空白
-    WakeWordCheck --> PromptUser: ウェイクワードのみ検出
-    PromptUser --> RecordingCommand: 「はい、どうぞ。」発話後<br/>コマンド録音
-    RecordingCommand --> ProcessCommand: コマンド認識
-    WakeWordCheck --> ProcessCommand: コマンド付きで検出
-    ProcessCommand --> Idle: 処理実行・返答
+```plantuml
+@startuml
+!theme plain
+skinparam shadowing false
+skinparam defaultFontName "sans-serif"
+
+[*] --> StartupGreeting : 起動
+StartupGreeting --> Idle : 起動案内アナウンス
+Idle --> Recording : マイク録音 (4秒間)
+Recording --> Recognizing : faster-whisper (STT)
+Recognizing --> WakeWordCheck : テキスト判定
+WakeWordCheck --> Idle : ウェイクワード不一致 / 空白
+WakeWordCheck --> PromptUser : ウェイクワードのみ検出
+PromptUser --> RecordingCommand : 「はい、どうぞ。」発話後\nコマンド録音
+RecordingCommand --> ProcessCommand : コマンド認識
+WakeWordCheck --> ProcessCommand : コマンド付きで検出
+ProcessCommand --> Idle : 処理実行・返答
+@enduml
 ```
 
 - **ウェイクワード正規表現**:

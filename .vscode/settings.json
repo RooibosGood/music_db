@@ -1,0 +1,5 @@
+{
+  "plantuml.render": "PlantUMLServer",
+  "plantuml.server": "https://www.plantuml.com/plantuml",
+  "markdown-preview-enhanced.plantumlServer": "https://www.plantuml.com/plantuml"
+}
