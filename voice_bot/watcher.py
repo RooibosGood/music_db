@@ -3,6 +3,7 @@
 import time
 from .db import find_track_metadata
 from . import config
+from . import daily_info
 from . import mpd_client
 from . import state
 from . import tts
@@ -14,17 +15,23 @@ from .broadcaster import (
 
 
 def play_startup_greeting():
-    """起動時の初期案内アナウンス（英語/日本語モード連動・Webチャット画面にも表示）"""
+    """起動時の初期案内アナウンス（日付・天気・今日のエピソードを統合、英語/日本語モード連動・Webチャット画面にも表示）"""
     try:
         if config.ANNOUNCE_LANGUAGE == "en":
-            greeting = (
+            base_greeting = (
                 "Hello! This is your moOde AI Assistant. "
                 "Say 'Hey Master' to request a song, or use the web chat below to play your favorite music."
             )
-            print(f"🎙️ [Greeting] 起動案内 (English): '{greeting}'", flush=True)
+            if config.ENABLE_DAILY_INFO:
+                daily_intro = daily_info.generate_daily_intro(language="en")
+                full_greeting = f"{base_greeting} {daily_intro}" if daily_intro else base_greeting
+            else:
+                full_greeting = base_greeting
+
+            print(f"🎙️ [Greeting] 起動案内 (English): '{full_greeting}'", flush=True)
             msg_record = {
                 "sender": "assistant",
-                "text": greeting,
+                "text": full_greeting,
                 "source": "system",
                 "action": "greeting",
                 "timestamp": time.strftime("%H:%M:%S"),
@@ -33,17 +40,23 @@ def play_startup_greeting():
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             broadcast_process_status("tts", "🎙️ Speaking startup greeting...")
-            tts.speak_english(greeting)
+            tts.speak_english(full_greeting)
             broadcast_process_status("idle", "🎙️ Ready for voice commands ('Hey Master')")
         else:
-            greeting = (
+            base_greeting = (
                 "こんにちは！moOde AI アシスタントです。"
                 "マイクに向かって「ヘイ、マスター」と話しかけるか、下のチャット欄から曲やジャンルをリクエストしてください。"
             )
-            print(f"🎙️ [Greeting] 起動案内 (Japanese): '{greeting}'", flush=True)
+            if config.ENABLE_DAILY_INFO:
+                daily_intro = daily_info.generate_daily_intro(language="ja")
+                full_greeting = f"{base_greeting} {daily_intro}" if daily_intro else base_greeting
+            else:
+                full_greeting = base_greeting
+
+            print(f"🎙️ [Greeting] 起動案内 (Japanese): '{full_greeting}'", flush=True)
             msg_record = {
                 "sender": "assistant",
-                "text": greeting,
+                "text": full_greeting,
                 "source": "system",
                 "action": "greeting",
                 "timestamp": time.strftime("%H:%M:%S"),
@@ -52,7 +65,7 @@ def play_startup_greeting():
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             broadcast_process_status("tts", "🎙️ 起動案内を発話中...")
-            tts.speak(greeting)
+            tts.speak(full_greeting)
             broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
     except Exception as e:
         print(f"⚠️ [Greeting] 起動アナウンスエラー: {e}", flush=True)

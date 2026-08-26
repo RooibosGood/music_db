@@ -118,6 +118,7 @@ Audio_SQL/
 │   ├── config.py           # 設定値・定数定義（IP、ポート、モデル名、音声デバイス設定等）
 │   ├── state.py            # 共有状態管理（WebSocketクライアントリスト、チャット履歴等）
 │   ├── broadcaster.py      # WebSocket リアルタイム配信 & 進行ステータス通知
+│   ├── daily_info.py       # 天気・日付・今日のエピソード取得 & 起動ナレーション生成
 │   ├── llm.py              # LLM 意図解析 (Ollama) & ユーザーリクエスト処理コア
 │   ├── watcher.py          # トラック変更監視ループ (2曲目以降の自動解説) & 起動案内
 │   ├── stt.py              # 音声認識 (Whisperモデル、マイク録音、STT処理、音声ループ)
@@ -142,11 +143,12 @@ Audio_SQL/
 
 | モジュール | 主な責務・提供機能 |
 | :--- | :--- |
-| **`voice_bot/config.py`** | `MOODE_IP`, `MOODE_PORT`, `VOICEVOX_URL`, `OLLAMA_CHAT_URL`, `LLM_MODEL`, `ANNOUNCE_LANGUAGE`, マイク・オーディオ出力デバイス設定などの定数・設定値管理。 |
+| **`voice_bot/config.py`** | `MOODE_IP`, `MOODE_PORT`, `VOICEVOX_URL`, `OLLAMA_CHAT_URL`, `LLM_MODEL`, `ANNOUNCE_LANGUAGE`, 天気・地域設定 (`WEATHER_CITY`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`), マイク・オーディオ出力デバイス設定などの定数・設定値管理。 |
+| **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、および Ollama LLM を用いた起動時デイリーナレーションの自動生成・フォールバック合成。 |
 | **`voice_bot/state.py`** | `chat_history`, `active_websockets`, `voice_state`, `current_processing_state` の定義および同一曲判定ヘルパー `is_same_track()`。 |
 | **`voice_bot/broadcaster.py`** | `broadcast_event()`, `broadcast_process_status()`, `broadcast_status()` による WebSocket 全体へのリアルタイムプッシュ通信。 |
 | **`voice_bot/llm.py`** | `http_post_json()`, `parse_intent_with_llm()` による LLM 意図解析、および `process_user_message()` による音声・チャット共通処理エンジン。 |
-| **`voice_bot/watcher.py`** | `run_track_watcher_loop()` による moOde 再生曲変更の常時監視と自動曲紹介発話、`play_startup_greeting()` による起動アナウンス。 |
+| **`voice_bot/watcher.py`** | `run_track_watcher_loop()` による moOde 再生曲変更の常時監視と自動曲紹介発話、`play_startup_greeting()` による起動アナウンス（基本案内＋デイリーインフォメーション統合）。 |
 | **`voice_bot/stt.py`** | `init_whisper()`, `record_audio_stream()`, `speech_to_text()`, `run_voice_loop()` によるマイク入力監視・ウェイクワード検知。 |
 | **`voice_bot/api.py`** | FastAPI インスタンス作成、静的ファイル配信 (`/`)、REST API (`/api/chat`, `/api/status`, `/api/player/control`, `/api/player/cover`, `/api/history`)、WebSocket (`/ws`)。 |
 | **`voice_bot/main.py`** | CLI 引数解析 (`argparse`)、各モジュールへの設定値反映、監視スレッド・音声ループ起動、Uvicorn サーバー起動。 |
@@ -302,6 +304,27 @@ ProcessCommand --> Idle : 処理実行・返答
   - `hey[\s、,。！？!?]*master`
 - **ハルシネーション除外フィルタ**:
   - 「ご視聴ありがとうございました」「チャンネル登録」「高評価」「字幕」等の Whisper 特有の無音時ハルシネーションを自動検知して破棄。
+
+---
+
+### 5.7 起動アナウンス & デイリーインフォメーション (`voice_bot/daily_info.py`, `voice_bot/watcher.py`)
+
+システム起動時、初期ガイダンス（「Hello!...」/「こんにちは！...」）に続いて、**今日の日付・天気・今日にちなんだエピソード（歴史的出来事・音楽記念日等）** を自然に繋げて発話・Webチャットへ配信します。
+
+#### 1. 情報収集フロー
+1. **今日の日付 (`format_current_date`)**:
+   - 英語: `Wednesday, August 26th, 2026` などの曜日・月名・序数付き日付。
+   - 日本語: `2026年8月26日 水曜日`。
+2. **天気情報の取得 (`fetch_weather_forecast`)**:
+   - **Open-Meteo API**（APIキー不要）を利用し、設定された都市（デフォルト: Tokyo / 東京）の現在天気・気温および予想最高・最低気温を取得。
+   - WMO Weather Code を英語および日本語の天況表現に自動マッピング。
+3. **今日のエピソードの取得 (`fetch_today_episode`)**:
+   - **英語**: **Wikipedia On This Day API** (`https://en.wikipedia.org/api/rest_v1/feed/onthisday/all/{MM}/{DD}`) から、音楽・文化・歴史的出来事・記念日を検索。
+   - **日本語**: **Wikipedia API**（X月X日の概要・記念日）から今日のトピック・記念日を抽出。
+
+#### 2. LLM による自然なナレーション文生成 (`generate_daily_intro`)
+- 収集した日付・天気・エピソード情報を **Ollama LLM (`config.LLM_MODEL`)** に渡し、初期挨拶に続く 2〜3文のラジオDJ / アシスタント風トークを自動生成。
+- LLM オフライン時や応答遅延時は、定型テンプレート合成へ自動フォールバックし、停止することなく確実に案内を発話。
 
 ---
 

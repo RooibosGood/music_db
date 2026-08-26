@@ -75,11 +75,39 @@ def main():
         action="store_true",
         help="Disable microphone voice listener thread",
     )
+    parser.add_argument(
+        "--city",
+        type=str,
+        default=config.WEATHER_CITY,
+        help=f"City name for weather forecast (default: {config.WEATHER_CITY})",
+    )
+    parser.add_argument(
+        "--lat",
+        type=float,
+        default=config.WEATHER_LATITUDE,
+        help=f"Latitude for weather forecast (default: {config.WEATHER_LATITUDE})",
+    )
+    parser.add_argument(
+        "--lon",
+        type=float,
+        default=config.WEATHER_LONGITUDE,
+        help=f"Longitude for weather forecast (default: {config.WEATHER_LONGITUDE})",
+    )
+    parser.add_argument(
+        "--no-daily-info",
+        action="store_true",
+        help="Disable startup date, weather and episode announcement",
+    )
     args = parser.parse_args()
 
     config.MOODE_IP = args.moode_ip
     config.MOODE_PORT = args.moode_port
     config.LLM_MODEL = args.model
+    config.WEATHER_CITY = args.city
+    config.WEATHER_LATITUDE = args.lat
+    config.WEATHER_LONGITUDE = args.lon
+    if args.no_daily_info:
+        config.ENABLE_DAILY_INFO = False
 
     # 言語モードの判定
     if args.ja:
@@ -112,12 +140,18 @@ def main():
         if config.ANNOUNCE_LANGUAGE == "en"
         else "🎙️ ナレーション: 日本語モード (Japanese - description_ja 読み上げ)"
     )
+    daily_info_banner = (
+        f"有効 (都市: {config.WEATHER_CITY})"
+        if config.ENABLE_DAILY_INFO
+        else "無効 (--no-daily-info)"
+    )
     print("=" * 70)
     print(" 🎵 moOde AI Master (Voice & Web Chat Assistant)")
     print(f" 📡 moOde IP   : {config.MOODE_IP}:{config.MOODE_PORT}")
     print(f" 🤖 LLM モデル : {config.LLM_MODEL} (Ollama)")
     print(f" 🔊 音声出力   : {config.AUDIO_OUTPUT_DEV}")
     print(f" {lang_banner}")
+    print(f" ☀️ デイリー情報: {daily_info_banner}")
     print(f" 🌐 Web UI     : http://{args.host}:{args.port} (ブラウザでアクセス)")
     print(f" 🎙️ 音声入力   : {'無効 (--no-voice)' if args.no_voice else '有効 (ヘイ、マスター)'}")
     print("=" * 70)

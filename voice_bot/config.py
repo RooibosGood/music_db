@@ -40,3 +40,12 @@ CHANNELS: int = 1
 RATE: int = 16000
 CHUNK: int = 1024
 RECORD_SECONDS: int = 4
+
+# ==================== 天気・デイリー情報設定 ====================
+ENABLE_DAILY_INFO: bool = True  # 起動時に日付・天気・今日のエピソードを紹介するかどうか
+WEATHER_CITY: str = "Tokyo"  # 都市名（英語表記）
+WEATHER_CITY_JA: str = "東京"  # 都市名（日本語表記）
+WEATHER_LATITUDE: float = 35.6895  # 緯度（デフォルト: 東京）
+WEATHER_LONGITUDE: float = 139.6917  # 経度（デフォルト: 東京）
+WEATHER_TIMEZONE: str = "Asia/Tokyo"  # タイムゾーン
+
