@@ -108,22 +108,30 @@ python build_music_db.py --flac-only --limit 0 --reset
 
 ---
 
-## 既存DBからの長尺音源（20分以上）削除ツール
+## メタデータクリーンアップ・修復ツール (`cleanup_long_tracks.py`)
 
-すでにデータベースに登録されている楽曲の中から、DVD音声などの 20分（1,200秒）以上の長尺ファイルを検出し、SQLiteデータベースから一括削除する専用スクリプト `cleanup_long_tracks.py` を用意しています。
+長尺音源の削除に加えて、年号の異常修復や英語解説文のクリーンアップを行える専用メンテナンスツールです。
 
 ```bash
-# 1. まず対象となる長尺音源の一覧を確認（削除は行わない）
-python cleanup_long_tracks.py --dry-run
+# 1. すべてのクリーンアップを一括実行（長尺音源削除・年号修復・英語解説文修復）
+python cleanup_long_tracks.py --all
 
-# 2. 確認しながら削除を実行
-python cleanup_long_tracks.py
+# 2. 年号の異常（11967, 11960s, 1 960s, 160s, 1 177 等の5桁/3桁/スペース混入）のみを検出・修復
+python cleanup_long_tracks.py --fix-years
 
-# 3. 確認プロンプトをスキップして即座に削除（VACUUMも実行）
-python cleanup_long_tracks.py -y
+# 3. 英語解説文 (description_en) に混入した日本語やゴミテキストをLLMで修復
+python cleanup_long_tracks.py --fix-en-descriptions
 
-# 4. しきい値の分数を変更して実行（例: 30分以上を削除）
-python cleanup_long_tracks.py --minutes 30
+# 4. 長尺音源（20分以上）のみを検出・削除
+python cleanup_long_tracks.py --cleanup-duration
+
+# 5. 事前に変更内容をプレビュー（DB更新なし）
+python cleanup_long_tracks.py --all --dry-run
+python cleanup_long_tracks.py --fix-years --dry-run
+python cleanup_long_tracks.py --fix-en-descriptions --dry-run
+
+# 6. 確認プロンプトをスキップして即座に実行
+python cleanup_long_tracks.py --all -y
 ```
 
 ---
