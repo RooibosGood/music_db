@@ -112,10 +112,11 @@ API_ROUTER <==> WEB : WebSocket 状態同期・進行配信
 ```text
 Audio_SQL/
 ├── voice_bot.py            # 互換起動用エントリーポイント (thin wrapper)
+├── voice_bot_config.json   # 動作設定ファイル (moOde, LLM, 音声, 天気, サーバー等)
 ├── voice_bot/              # 音声ボット本体パッケージ
 │   ├── __init__.py         # パッケージ初期化・エントリーエクスポート
 │   ├── __main__.py         # `python -m voice_bot` 実行用エントリーポイント
-│   ├── config.py           # 設定値・定数定義（IP、ポート、モデル名、音声デバイス設定等）
+│   ├── config.py           # 設定値・定数定義 & voice_bot_config.json ロード
 │   ├── state.py            # 共有状態管理（WebSocketクライアントリスト、チャット履歴等）
 │   ├── broadcaster.py      # WebSocket リアルタイム配信 & 進行ステータス通知
 │   ├── daily_info.py       # 天気・日付・今日のエピソード取得 & 起動ナレーション生成
@@ -123,7 +124,7 @@ Audio_SQL/
 │   ├── watcher.py          # トラック変更監視ループ (2曲目以降の自動解説) & 起動案内
 │   ├── stt.py              # 音声認識 (Whisperモデル、マイク録音、STT処理、音声ループ)
 │   ├── api.py              # FastAPI Web アプリケーション & REST/WebSocket エンドポイント
-│   ├── main.py             # CLI 引数解析、モジュール設定同期、スレッド起動オーケストレーション
+│   ├── main.py             # CLI 引数解析、設定ファイル同期、スレッド起動オーケストレーション
 │   ├── coverart.py         # アルバムジャケット画像取得（MPD/Web/iTunes API）
 │   ├── db.py               # 楽曲メタデータ DB アクセス層（検索・照合・キュー追加）
 │   ├── mpd_client.py       # moOde / MPD 制御・操作 & 再生状態取得
@@ -143,7 +144,8 @@ Audio_SQL/
 
 | モジュール | 主な責務・提供機能 |
 | :--- | :--- |
-| **`voice_bot/config.py`** | `MOODE_IP`, `MOODE_PORT`, `VOICEVOX_URL`, `OLLAMA_CHAT_URL`, `LLM_MODEL`, `ANNOUNCE_LANGUAGE`, 天気・地域設定 (`WEATHER_CITY`, `WEATHER_LATITUDE`, `WEATHER_LONGITUDE`), マイク・オーディオ出力デバイス設定などの定数・設定値管理。 |
+| **`voice_bot_config.json`** | システム全体の設定ファイル。moOde IP・ポート、LLMモデル、アナウンス言語、オーディオデバイス、滋賀県栗東市等の天気設定、Webサーバー設定を管理。 |
+| **`voice_bot/config.py`** | `load_config_from_file()` による `voice_bot_config.json` の自動パース・反映および各種定数・デフォルト値管理。 |
 | **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、および Ollama LLM を用いた起動時デイリーナレーションの自動生成・フォールバック合成。 |
 | **`voice_bot/state.py`** | `chat_history`, `active_websockets`, `voice_state`, `current_processing_state` の定義および同一曲判定ヘルパー `is_same_track()`。 |
 | **`voice_bot/broadcaster.py`** | `broadcast_event()`, `broadcast_process_status()`, `broadcast_status()` による WebSocket 全体へのリアルタイムプッシュ通信。 |
@@ -151,11 +153,54 @@ Audio_SQL/
 | **`voice_bot/watcher.py`** | `run_track_watcher_loop()` による moOde 再生曲変更の常時監視と自動曲紹介発話、`play_startup_greeting()` による起動アナウンス（基本案内＋デイリーインフォメーション統合）。 |
 | **`voice_bot/stt.py`** | `init_whisper()`, `record_audio_stream()`, `speech_to_text()`, `run_voice_loop()` によるマイク入力監視・ウェイクワード検知。 |
 | **`voice_bot/api.py`** | FastAPI インスタンス作成、静的ファイル配信 (`/`)、REST API (`/api/chat`, `/api/status`, `/api/player/control`, `/api/player/cover`, `/api/history`)、WebSocket (`/ws`)。 |
-| **`voice_bot/main.py`** | CLI 引数解析 (`argparse`)、各モジュールへの設定値反映、監視スレッド・音声ループ起動、Uvicorn サーバー起動。 |
+| **`voice_bot/main.py`** | `voice_bot_config.json` の先行ロード、CLI 引数解析 (`argparse`) による上書き、監視スレッド・音声ループ起動、Uvicorn サーバー起動。 |
 | **`voice_bot/coverart.py`** | アルバムアートの多段探索（ローカル ➔ MPD albumart ➔ readpicture ➔ moOde coverart.php ➔ iTunes API ➔ Deezer API ➔ デフォルトSVG）とキャッシュ。 |
 | **`voice_bot/mpd_client.py`** | MPD クライアント接続管理、`control_moode()` による再生・一時停止・選曲・音量制御、`get_moode_status()` による詳細再生情報取得。 |
 | **`voice_bot/tts.py`** | `speak()` (VOICEVOX), `speak_english()` (edge-tts / Google TTS), `build_english_track_announcement()` による曲紹介文生成、ALSA デバイス検出。 |
 | **`voice_bot.py`** | ルート直下の互換起動用 thin wrapper (`from voice_bot.main import main; main()`)。 |
+
+### 3.2 設定ファイル仕様 (`voice_bot_config.json`)
+
+`voice_bot` は起動時にルート直下の `voice_bot_config.json` を自動読み込みます（`--config <path>` で任意ファイルを指定可能）。
+CLI引数が同時に渡された場合は、CLI引数の値が優先されます。
+
+```json
+{
+  "moode": {
+    "ip": "192.168.68.198",
+    "port": 6600
+  },
+  "llm": {
+    "model": "qwen2.5:1.5b",
+    "ollama_chat_url": "http://localhost:11434/api/chat"
+  },
+  "announcement": {
+    "language": "en",
+    "english_voice": "en-US-ChristopherNeural",
+    "voicevox_url": "http://localhost:50021",
+    "speaker_id": 13
+  },
+  "audio": {
+    "output_device_name": "Sennheiser",
+    "output_alsa_dev": null,
+    "input_device_name": "Sennheiser SP 20",
+    "input_device_index": null,
+    "enable_voice_listener": true
+  },
+  "weather_and_daily_info": {
+    "enable": true,
+    "city": "Ritto, Shiga",
+    "city_ja": "滋賀県栗東市",
+    "latitude": 35.0163,
+    "longitude": 135.9733,
+    "timezone": "Asia/Tokyo"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
+```
 
 ---
 
@@ -229,14 +274,23 @@ moOde の再生中楽曲から `music_meta.db` のレコードを逆引きし、
 
 ---
 
-### 5.3 自動トラック変更監視 (`voice_bot/watcher.py`)
+### 5.3 自動トラック変更監視 & 再生完了案内 (`voice_bot/watcher.py`)
 
-moOde の再生進行をバックグラウンドスレッドで常時監視し、**2曲目以降のトラック切り替わり時にも自動で曲紹介をアナウンス**します。
+moOde の再生進行をバックグラウンドスレッドで常時監視し、**2曲目以降のトラック切り替わり時の自動曲紹介** および **全曲再生完了時の案内と次曲リクエスト問いかけ** を行います。
 
+#### 1. 2曲目以降の自動曲紹介フロー
 1. **切り替わり検知**: MPD の `currentsong()` を定期取得し、ファイルパスや曲IDの変更を検出。
 2. **一時停止 & 解説取得**: 音楽再生を一旦ポーズし、該当曲の解説文を DB から取得。
 3. **曲紹介アナウンス**: 英語DJモードまたは日本語モードで曲紹介を発話。
 4. **音楽再開**: 発話完了後に自動的に音楽再生を再開。
+
+#### 2. 全曲再生完了案内 & 次曲リクエスト問いかけフロー (`announce_playback_finished`)
+1. **再生終了検知**: 再生中状態 (`play`) からキューの最後まで到達して停止状態 (`stop`) に遷移した瞬間を検知。
+2. **完了アナウンス & 問いかけ**:
+   - **英語DJモード**: `"All playback has finished. What would you like to listen to next? Say 'Hey Master' to request a song, or use the web chat below to make a request."`
+   - **日本語モード**: `"すべての曲の再生が終了しました。今度はどんな曲をかけますか？マイクに向かってリクエストするか、下のチャット欄からお知らせください。"`
+3. **Webチャット & ステータス配信**: チャット画面へ終了メッセージを追加し、音声待機状態（「ヘイ、マスター」）へ復帰。
+4. **多重発話防止**: 次に新しい再生が開始されるまで重複発話を抑制。
 
 ---
 
@@ -304,6 +358,10 @@ ProcessCommand --> Idle : 処理実行・返答
   - `hey[\s、,。！？!?]*master`
 - **ハルシネーション除外フィルタ**:
   - 「ご視聴ありがとうございました」「チャンネル登録」「高評価」「字幕」等の Whisper 特有の無音時ハルシネーションを自動検知して破棄。
+- **ポップノイズ（プツプツ音）防止機構 (Persistent Audio Stream)**:
+  - 録音サイクル毎の PyAudio インスタンスおよびオーディオストリームの開閉（Open / Close / Terminate）を廃止し、起動時に1度だけ常時オープンして保持。
+  - USBオーディオ機器（Sennheiser SP 20等）のADC/DAC電源遷移・クロック切り替えによるクリック音・プツプツ音を完全に防止。
+  - システム発話中はストリームを破棄せず、バッファを安全にドレイン（空読み）してエコーを遮断。
 
 ---
 
@@ -316,7 +374,7 @@ ProcessCommand --> Idle : 処理実行・返答
    - 英語: `Wednesday, August 26th, 2026` などの曜日・月名・序数付き日付。
    - 日本語: `2026年8月26日 水曜日`。
 2. **天気情報の取得 (`fetch_weather_forecast`)**:
-   - **Open-Meteo API**（APIキー不要）を利用し、設定された都市（デフォルト: Tokyo / 東京）の現在天気・気温および予想最高・最低気温を取得。
+   - **Open-Meteo API**（APIキー不要）を利用し、設定された都市（デフォルト: 滋賀県栗東市 / Ritto, Shiga）の現在天気・気温および予想最高・最低気温を取得。
    - WMO Weather Code を英語および日本語の天況表現に自動マッピング。
 3. **今日のエピソードの取得 (`fetch_today_episode`)**:
    - **英語**: **Wikipedia On This Day API** (`https://en.wikipedia.org/api/rest_v1/feed/onthisday/all/{MM}/{DD}`) から、音楽・文化・歴史的出来事・記念日を検索。

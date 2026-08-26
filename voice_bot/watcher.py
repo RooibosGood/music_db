@@ -71,10 +71,58 @@ def play_startup_greeting():
         print(f"⚠️ [Greeting] 起動アナウンスエラー: {e}", flush=True)
 
 
+def announce_playback_finished():
+    """キュー内の全楽曲再生終了時のアナウンス＆次曲リクエスト問いかけ"""
+    try:
+        if config.ANNOUNCE_LANGUAGE == "en":
+            announce_text = (
+                "All playback has finished. What would you like to listen to next? "
+                "Say 'Hey Master' to request a song, or use the web chat below to make a request."
+            )
+            print(f"🎙️ [Watcher 再生終了案内 (English)] {announce_text}", flush=True)
+            msg_record = {
+                "sender": "assistant",
+                "text": announce_text,
+                "source": "auto_announcer",
+                "action": "playback_finished",
+                "timestamp": time.strftime("%H:%M:%S"),
+            }
+            state.chat_history.append(msg_record)
+            broadcast_event({"type": "chat_message", "message": msg_record})
+
+            broadcast_process_status("tts", "🎙️ Speaking playback finished announcement...")
+            tts.speak_english(announce_text)
+            broadcast_process_status("idle", "🎙️ Ready for voice commands ('Hey Master')")
+        else:
+            announce_text = (
+                "すべての曲の再生が終了しました。今度はどんな曲をかけますか？"
+                "マイクに向かってリクエストするか、下のチャット欄からお知らせください。"
+            )
+            print(f"📖 [Watcher 再生終了案内 (Japanese)] {announce_text}", flush=True)
+            msg_record = {
+                "sender": "assistant",
+                "text": announce_text,
+                "source": "auto_announcer",
+                "action": "playback_finished",
+                "timestamp": time.strftime("%H:%M:%S"),
+            }
+            state.chat_history.append(msg_record)
+            broadcast_event({"type": "chat_message", "message": msg_record})
+
+            broadcast_process_status("tts", "🎙️ 再生完了案内を発話中...")
+            tts.speak(announce_text)
+            broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
+    except Exception as e:
+        print(f"⚠️ [Watcher] 再生終了アナウンスエラー: {e}", flush=True)
+
+
 def run_track_watcher_loop():
-    """moOde の再生進行を監視し、2曲目以降のトラック切り替わり時に自動で曲紹介を読み上げるスレッド"""
+    """moOde の再生進行を監視し、2曲目以降のトラック切り替わり時の自動曲紹介および全曲再生終了案内を読み上げるスレッド"""
     time.sleep(3.0)  # 起動初期化待ち
-    print("🎧 [Watcher] トラック変更監視ループを開始しました。(2曲目以降の自動解説)", flush=True)
+    print("🎧 [Watcher] トラック変更監視ループを開始しました。(2曲目以降の自動解説 & 再生終了案内)", flush=True)
+
+    was_playing = False
+    has_announced_finished = False
 
     while True:
         time.sleep(1.0)
@@ -91,6 +139,21 @@ def run_track_watcher_loop():
             song = status_data.get("song") or {}
             cur_file = song.get("file")
             cur_id = song.get("id")
+
+            # 再生中フラグの更新
+            if play_state == "play" and cur_file:
+                was_playing = True
+                has_announced_finished = False
+
+            # 全曲再生完了の検知（直前まで再生中で、現在停止状態 'stop' に遷移した場合）
+            if play_state == "stop" and was_playing and not has_announced_finished:
+                print("\n🏁 [Watcher] 全曲の再生完了を検知しました。", flush=True)
+                was_playing = False
+                has_announced_finished = True
+                mpd_client.last_announced_file = None
+                mpd_client.last_announced_songid = None
+                announce_playback_finished()
+                continue
 
             if not cur_file or play_state != "play":
                 continue

@@ -44,15 +44,10 @@ def init_whisper():
             print(f"⚠️ Whisper 初期化失敗: {e}")
 
 
-def record_audio_stream() -> Optional[io.BytesIO]:
-    """マイクから音声を録音 (発話中は待機)"""
-    if pyaudio is None:
+def open_input_stream(p: Any) -> Optional[Any]:
+    """マイク入力ストリームをオープン（永続利用）"""
+    if p is None:
         return None
-
-    while tts.is_speaking_event.is_set():
-        time.sleep(0.2)
-
-    p = pyaudio.PyAudio()
 
     input_device = None
     if config.INPUT_DEVICE_NAME:
@@ -78,10 +73,12 @@ def record_audio_stream() -> Optional[io.BytesIO]:
         try:
             input_device = p.get_default_input_device_info()
         except Exception:
-            p.terminate()
             return None
 
     selected_input_index = int(input_device["index"])
+    dev_name = input_device.get("name", f"Device #{selected_input_index}")
+    print(f"🎙️ [STT] マイク入力ストリームを開設: {dev_name} (Index: {selected_input_index})", flush=True)
+
     try:
         stream = p.open(
             format=config.FORMAT,
@@ -91,12 +88,30 @@ def record_audio_stream() -> Optional[io.BytesIO]:
             frames_per_buffer=config.CHUNK,
             input_device_index=selected_input_index,
         )
-    except Exception:
-        p.terminate()
+        return stream
+    except Exception as e:
+        print(f"⚠️ [STT] マイクストリームオープン失敗: {e}")
         return None
 
+
+def record_audio_from_stream(stream: Any, p: Any, record_seconds: Optional[int] = None) -> Optional[io.BytesIO]:
+    """常時オープンされたマイクストリームから指定秒数録音 (発話中はバッファを破棄ドレイン)"""
+    if stream is None or p is None:
+        return None
+
+    duration = record_seconds or config.RECORD_SECONDS
+    num_frames = int(config.RATE / config.CHUNK * duration)
+
+    # システム発話中はマイク入力を読み捨て（ドレイン）して待機
+    while tts.is_speaking_event.is_set():
+        try:
+            stream.read(config.CHUNK, exception_on_overflow=False)
+        except Exception:
+            pass
+        time.sleep(0.1)
+
     frames = []
-    for _ in range(0, int(config.RATE / config.CHUNK * config.RECORD_SECONDS)):
+    for _ in range(0, num_frames):
         if tts.is_speaking_event.is_set():
             break
         try:
@@ -105,17 +120,10 @@ def record_audio_stream() -> Optional[io.BytesIO]:
         except Exception:
             break
 
-    sample_width = p.get_sample_size(config.FORMAT)
-    try:
-        stream.stop_stream()
-        stream.close()
-    except Exception:
-        pass
-    p.terminate()
-
     if not frames:
         return None
 
+    sample_width = p.get_sample_size(config.FORMAT)
     wav_io = io.BytesIO()
     wf = wave.open(wav_io, "wb")
     wf.setnchannels(config.CHANNELS)
@@ -171,7 +179,7 @@ def command_after_wake_word(text: str) -> Optional[str]:
 
 
 def run_voice_loop():
-    """音声待機・認識バックグラウンドスレッド"""
+    """音声待機・認識バックグラウンドスレッド（ストリーム常時オープンによるポップノイズ防止）"""
     play_startup_greeting()
 
     init_whisper()
@@ -179,64 +187,91 @@ def run_voice_loop():
         print("🎙️ 音声入力デバイスまたはモデルが利用できないため、音声リスナーを停止します。（Web Chatは利用可能です）")
         return
 
+    p = pyaudio.PyAudio()
+    stream = open_input_stream(p)
+    if stream is None:
+        print("🎙️ マイク入力ストリームの初期化に失敗したため、音声リスナーを停止します。")
+        try:
+            p.terminate()
+        except Exception:
+            pass
+        return
+
     print("🎙️ 音声アシスタント待機ループを開始しました。(「ヘイ、マスター」)", flush=True)
 
-    while True:
-        try:
-            state.voice_state["is_listening"] = False
-            state.voice_state["state"] = "idle"
-            broadcast_event({"type": "voice_event", "event": "idle"})
+    try:
+        while True:
+            try:
+                state.voice_state["is_listening"] = False
+                state.voice_state["state"] = "idle"
+                broadcast_event({"type": "voice_event", "event": "idle"})
 
-            state.voice_state["is_listening"] = True
-            state.voice_state["state"] = "listening"
-            broadcast_event({"type": "voice_event", "event": "listening"})
+                state.voice_state["is_listening"] = True
+                state.voice_state["state"] = "listening"
+                broadcast_event({"type": "voice_event", "event": "listening"})
 
-            audio_data = record_audio_stream()
-            if not audio_data:
-                time.sleep(0.5)
-                continue
+                audio_data = record_audio_from_stream(stream, p, record_seconds=config.RECORD_SECONDS)
+                if not audio_data:
+                    time.sleep(0.3)
+                    continue
 
-            state.voice_state["state"] = "recognizing"
-            broadcast_event({"type": "voice_event", "event": "recognizing"})
-            broadcast_process_status("stt", "🎙️ 音声を文字起こし中 (Whisper)...")
+                state.voice_state["state"] = "recognizing"
+                broadcast_event({"type": "voice_event", "event": "recognizing"})
+                broadcast_process_status("stt", "🎙️ 音声を文字起こし中 (Whisper)...")
 
-            wake_text = speech_to_text(audio_data)
-            if not wake_text:
-                broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
-                continue
-
-            user_text = command_after_wake_word(wake_text)
-            if user_text is None:
-                broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
-                continue
-
-            if not user_text:
-                if config.ANNOUNCE_LANGUAGE == "en":
-                    tts.speak_english("Yes, I'm listening.")
-                else:
-                    tts.speak("はい、どうぞ。")
-                cmd_audio = record_audio_stream()
-                broadcast_process_status("stt", "🎙️ コマンドを認識中 (Whisper)...")
-                user_text = speech_to_text(cmd_audio)
-                if not user_text:
+                wake_text = speech_to_text(audio_data)
+                if not wake_text:
                     broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
                     continue
 
-            print(f"👤 [Voice Input] ユーザー発言: {user_text}", flush=True)
-            state.voice_state["last_text"] = user_text
+                user_text = command_after_wake_word(wake_text)
+                if user_text is None:
+                    broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
+                    continue
 
-            broadcast_event({
-                "type": "chat_message",
-                "message": {
-                    "sender": "user",
-                    "text": user_text,
-                    "source": "voice",
-                    "timestamp": time.strftime("%H:%M:%S"),
-                },
-            })
+                if not user_text:
+                    if config.ANNOUNCE_LANGUAGE == "en":
+                        tts.speak_english("Yes, I'm listening.")
+                    else:
+                        tts.speak("はい、どうぞ。")
+                    cmd_audio = record_audio_from_stream(stream, p, record_seconds=config.RECORD_SECONDS)
+                    broadcast_process_status("stt", "🎙️ コマンドを認識中 (Whisper)...")
+                    user_text = speech_to_text(cmd_audio)
+                    if not user_text:
+                        broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
+                        continue
 
-            process_user_message(user_text, source="voice", speak_voice=True)
+                print(f"👤 [Voice Input] ユーザー発言: {user_text}", flush=True)
+                state.voice_state["last_text"] = user_text
 
-        except Exception as e:
-            print(f"⚠️ 音声ループ例外: {e}")
-            time.sleep(1.0)
+                broadcast_event({
+                    "type": "chat_message",
+                    "message": {
+                        "sender": "user",
+                        "text": user_text,
+                        "source": "voice",
+                        "timestamp": time.strftime("%H:%M:%S"),
+                    },
+                })
+
+                process_user_message(user_text, source="voice", speak_voice=True)
+
+            except Exception as e:
+                print(f"⚠️ 音声ループ例外: {e}")
+                time.sleep(1.0)
+                # ストリーム異常時の自己再オープン
+                try:
+                    if stream and not stream.is_active():
+                        stream = open_input_stream(p)
+                except Exception:
+                    pass
+
+    finally:
+        try:
+            if stream:
+                stream.stop_stream()
+                stream.close()
+            if p:
+                p.terminate()
+        except Exception:
+            pass

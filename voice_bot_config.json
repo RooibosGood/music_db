@@ -1,0 +1,35 @@
+{
+  "moode": {
+    "ip": "192.168.68.198",
+    "port": 6600
+  },
+  "llm": {
+    "model": "qwen2.5:1.5b",
+    "ollama_chat_url": "http://localhost:11434/api/chat"
+  },
+  "announcement": {
+    "language": "en",
+    "english_voice": "en-US-ChristopherNeural",
+    "voicevox_url": "http://localhost:50021",
+    "speaker_id": 13
+  },
+  "audio": {
+    "output_device_name": "Sennheiser",
+    "output_alsa_dev": null,
+    "input_device_name": "Sennheiser SP 20",
+    "input_device_index": null,
+    "enable_voice_listener": true
+  },
+  "weather_and_daily_info": {
+    "enable": true,
+    "city": "Ritto, Shiga",
+    "city_ja": "滋賀県栗東市",
+    "latitude": 35.0163,
+    "longitude": 135.9733,
+    "timezone": "Asia/Tokyo"
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000
+  }
+}
