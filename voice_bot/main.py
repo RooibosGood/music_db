@@ -85,7 +85,12 @@ def main():
         help=f"Web server port (default: {config.SERVER_PORT})",
     )
     parser.add_argument(
-        "--no-voice",
+        "--mic", "--enable-mic", "--voice",
+        action="store_true",
+        help="Enable microphone voice listener thread (default: disabled)",
+    )
+    parser.add_argument(
+        "--no-mic", "--no-voice",
         action="store_true",
         help="Disable microphone voice listener thread",
     )
@@ -142,6 +147,12 @@ def main():
     if args.port is not None:
         config.SERVER_PORT = args.port
 
+    # マイク入力の判定 (CLI 引数が優先)
+    if args.mic or getattr(args, "enable_mic", False) or getattr(args, "voice", False):
+        config.ENABLE_VOICE_LISTENER = True
+    elif args.no_mic or getattr(args, "no_voice", False):
+        config.ENABLE_VOICE_LISTENER = False
+
     # 言語モードの判定
     if args.ja:
         config.ANNOUNCE_LANGUAGE = "ja"
@@ -164,8 +175,6 @@ def main():
     elif not config.AUDIO_OUTPUT_DEV:
         config.AUDIO_OUTPUT_DEV = tts.detect_alsa_output_device(config.AUDIO_OUTPUT_NAME)
 
-    is_voice_enabled = config.ENABLE_VOICE_LISTENER and not args.no_voice
-
     lang_banner = (
         "🎙️ ナレーション: 英語 DJ モード (English - description_en 読み上げ)"
         if config.ANNOUNCE_LANGUAGE == "en"
@@ -187,22 +196,22 @@ def main():
     print(f" {lang_banner}")
     print(f" ☀️ デイリー情報: {daily_info_banner}")
     print(f" 🌐 Web UI     : http://{config.SERVER_HOST}:{config.SERVER_PORT} (ブラウザでアクセス)")
-    print(f" 🎙️ 音声入力   : {'有効 (ヘイ、マスター)' if is_voice_enabled else '無効'}")
+    print(f" 🎙️ マイク入力 : {'有効 (ヘイ、マスター)' if config.ENABLE_VOICE_LISTENER else '無効 (Default: OFF / Webチャットをご利用ください)'}")
     print("=" * 70)
 
-    # 自動トラック変更監視スレッド起動（2曲目以降の自動曲紹介）
+    # 1. 起動案内アナウンス（マイクON/OFFに関わらず必ず実行）
+    threading.Thread(target=play_startup_greeting, daemon=True).start()
+
+    # 2. 自動トラック変更監視スレッド起動（2曲目以降の自動曲紹介 & 再生終了案内）
     watcher_thread = threading.Thread(target=run_track_watcher_loop, daemon=True)
     watcher_thread.start()
 
-    # 音声リスナースレッド起動
-    if is_voice_enabled:
+    # 3. 音声リスナースレッド起動（マイク有効時のみ）
+    if config.ENABLE_VOICE_LISTENER:
         voice_thread = threading.Thread(target=run_voice_loop, daemon=True)
         voice_thread.start()
-    else:
-        # no-voice時も起動案内を発話（言語連動）
-        threading.Thread(target=play_startup_greeting, daemon=True).start()
 
-    # Webサーバー (FastAPI + Uvicorn) 起動
+    # 4. Webサーバー (FastAPI + Uvicorn) 起動
     uvicorn.run(app, host=config.SERVER_HOST, port=config.SERVER_PORT, log_level="info")
 
 

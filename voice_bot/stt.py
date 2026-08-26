@@ -180,8 +180,6 @@ def command_after_wake_word(text: str) -> Optional[str]:
 
 def run_voice_loop():
     """音声待機・認識バックグラウンドスレッド（ストリーム常時オープンによるポップノイズ防止）"""
-    play_startup_greeting()
-
     init_whisper()
     if stt_model is None or pyaudio is None:
         print("🎙️ 音声入力デバイスまたはモデルが利用できないため、音声リスナーを停止します。（Web Chatは利用可能です）")

@@ -75,6 +75,7 @@ async def api_status():
         "moode_ip": f"{config.MOODE_IP}:{config.MOODE_PORT}",
         "language": config.ANNOUNCE_LANGUAGE,
         "llm_model": config.LLM_MODEL,
+        "enable_voice_listener": config.ENABLE_VOICE_LISTENER,
     })
 
 
@@ -135,6 +136,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     "voice_status": state.voice_state,
                     "process_status": state.current_processing_state,
                     "language": config.ANNOUNCE_LANGUAGE,
+                    "enable_voice_listener": config.ENABLE_VOICE_LISTENER,
+                    "history": state.chat_history,
                 },
                 ensure_ascii=False,
             )

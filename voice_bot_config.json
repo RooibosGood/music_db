@@ -18,7 +18,7 @@
     "output_alsa_dev": null,
     "input_device_name": "Sennheiser SP 20",
     "input_device_index": null,
-    "enable_voice_listener": true
+    "enable_mic": false
   },
   "weather_and_daily_info": {
     "enable": true,

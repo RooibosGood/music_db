@@ -51,7 +51,7 @@ WEATHER_TIMEZONE: str = "Asia/Tokyo"  # タイムゾーン
 # ==================== Webサーバー設定 ====================
 SERVER_HOST: str = "0.0.0.0"
 SERVER_PORT: int = 8000
-ENABLE_VOICE_LISTENER: bool = True
+ENABLE_VOICE_LISTENER: bool = False  # マイク音声入力リスナー（デフォルト: OFF）
 CONFIG_FILE_PATH: Optional[str] = None
 
 
@@ -132,6 +132,8 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
             INPUT_DEVICE_INDEX = int(audio_cfg["input_device_index"])
         if "enable_voice_listener" in audio_cfg:
             ENABLE_VOICE_LISTENER = bool(audio_cfg["enable_voice_listener"])
+        elif "enable_mic" in audio_cfg:
+            ENABLE_VOICE_LISTENER = bool(audio_cfg["enable_mic"])
 
         # 天気・デイリー情報設定
         weather_cfg = data.get("weather_and_daily_info", {})

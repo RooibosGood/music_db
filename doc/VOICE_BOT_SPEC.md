@@ -185,7 +185,7 @@ CLI引数が同時に渡された場合は、CLI引数の値が優先されま�
     "output_alsa_dev": null,
     "input_device_name": "Sennheiser SP 20",
     "input_device_index": null,
-    "enable_voice_listener": true
+    "enable_mic": false
   },
   "weather_and_daily_info": {
     "enable": true,
@@ -469,34 +469,38 @@ ProcessCommand --> Idle : 処理実行・返答
 ### 8.1 起動コマンド
 
 ```bash
-# 1. パッケージモジュールとして起動 (推奨)
-python -m voice_bot --en
-# または
-python -m voice_bot --lang en
+# 1. パッケージモジュールとして起動 (推奨・デフォルト: マイクOFF / 英語DJモード / 栗東市天気)
+python -m voice_bot
 
-# 2. 互換スクリプトとして起動
-python voice_bot.py --en
+# 2. マイク音声入力を有効にして起動 (「ヘイ、マスター」リスナー常駐)
+python -m voice_bot --mic
+# または
+python -m voice_bot --enable-mic
 
 # 3. 日本語モードで起動 (description_ja を VOICEVOX で読み上げ)
 python -m voice_bot --ja
 
 # 4. moOdeのIPとWebポートを指定して起動
-python -m voice_bot --en --moode-ip 192.168.1.50 --port 8080
-
-# 5. マイク無効 (Web UI のみ) で起動
-python -m voice_bot --en --no-voice
+python -m voice_bot --moode-ip 192.168.1.50 --port 8080
 ```
 
 ### 8.2 コマンドライン引数一覧
 | 引数 | エイリアス | 型 | デフォルト値 | 説明 |
 | :--- | :--- | :--- | :--- | :--- |
+| `--config` | `-c` | `string` | `voice_bot_config.json` | 読み込む JSON 設定ファイルのパス |
 | `--lang` | `-l` | `string` | `en` | 曲紹介の言語指定 (`en`, `english`, `ja`, `japanese`) |
 | `--en` | `--english` | フラグ | - | **英語DJモード**で起動（`description_en` を英語音声で再生） |
 | `--ja` | `--japanese` | フラグ | - | **日本語モード**で起動（`description_ja` を VOICEVOX で再生） |
+| `--mic` | `--enable-mic`, `--voice` | フラグ | `False` | **マイク音声入力を有効化**（「ヘイ、マスター」待機ループを起動） |
+| `--no-mic` | `--no-voice` | フラグ | `True` | **マイク音声入力を無効化**（Webチャット専用モード） |
 | `--model` | `--llm-model` | `string` | `qwen2.5:1.5b` | Ollama LLM モデル名 |
 | `--moode-ip` | - | `string` | `192.168.68.198` | moOde audio (Raspberry Pi) の IP アドレス |
 | `--moode-port`| - | `int` | `6600` | moOde audio の MPD ポート番号 |
 | `--audio-dev` | - | `string` | `None`（自動検出） | 音声出力先 ALSA デバイス（例: `plughw:1,0`, `default`） |
+| `--city` | - | `string` | `Ritto, Shiga` | 天気予報の都市名（英語表記） |
+| `--city-ja` | - | `string` | `滋賀県栗東市` | 天気予報の都市名（日本語表記） |
+| `--lat` | - | `float` | `35.0163` | 天気予報の緯度 |
+| `--lon` | - | `float` | `135.9733` | 天気予報の経度 |
+| `--no-daily-info` | - | フラグ | `False` | 起動時デイリー情報（日付・天気・エピソード）を無効化 |
 | `--host` | - | `string` | `0.0.0.0` | FastAPI Web サーバーのバインドホスト |
 | `--port` | - | `int` | `8000` | FastAPI Web サーバーのポート番号 |
-| `--no-voice` | - | フラグ | `False` | マイク音声リスナースレッドを起動しない（Web専用モード） |\n

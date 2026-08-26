@@ -1791,12 +1791,15 @@
     function handleServerEvent(data) {
       if (data.type === 'status_update') {
         updatePlayerUI(data.player_status);
-        updateVoiceStatus(data.voice_status);
+        updateVoiceStatus(data.voice_status, data.enable_voice_listener);
         if (data.language) {
           updateLanguageMode(data.language);
         }
         if (data.process_status) {
           updateProcessStatus(data.process_status);
+        }
+        if (data.history && Array.isArray(data.history)) {
+          syncChatHistory(data.history);
         }
       } else if (data.type === 'chat_message') {
         appendMessage(data.message);
@@ -1981,7 +1984,17 @@
       }
     }
 
-    function updateVoiceStatus(voiceStatus) {
+    let isMicEnabled = false;
+
+    function updateVoiceStatus(voiceStatus, micEnabled = null) {
+      if (micEnabled !== null && micEnabled !== undefined) {
+        isMicEnabled = !!micEnabled;
+      }
+      if (!isMicEnabled) {
+        soundBars.classList.remove('listening');
+        voiceListenerText.textContent = '🎙️ マイク入力: OFF (Webチャットをご利用ください)';
+        return;
+      }
       if (!voiceStatus) return;
       if (voiceStatus.is_listening) {
         soundBars.classList.add('listening');
@@ -2064,7 +2077,29 @@
       handleChatSubmit();
     }
 
+    const renderedMessageKeys = new Set();
+
+    function getMessageKey(msg) {
+      return `${msg.sender || ''}_${msg.timestamp || ''}_${(msg.text || '').substring(0, 30)}`;
+    }
+
+    function syncChatHistory(history) {
+      if (!Array.isArray(history) || history.length === 0) return;
+      history.forEach(msg => appendMessage(msg));
+    }
+
     function appendMessage(msg) {
+      if (!msg) return;
+      const key = getMessageKey(msg);
+      if (renderedMessageKeys.has(key)) return;
+      renderedMessageKeys.add(key);
+
+      // 初回挨拶の静的プレースホルダーがあれば削除
+      const initGreeting = document.getElementById('initialGreetingMsg');
+      if (initGreeting) {
+        initGreeting.remove();
+      }
+
       const isUser = (msg.sender === 'user');
       const msgDiv = document.createElement('div');
       msgDiv.className = `message ${isUser ? 'user' : 'assistant'}`;
@@ -2099,6 +2134,9 @@
         } else if (msg.action === 'next') {
           actionIcon = '⏭️';
           actionText = '次の曲へスキップしました';
+        } else if (msg.action === 'playback_finished') {
+          actionIcon = '🏁';
+          actionText = 'すべての再生が終了しました';
         }
 
         if (msg.tracks_added && msg.tracks_added.length > 0) {
@@ -2123,7 +2161,7 @@
 
       const sourceTag = document.createElement('div');
       sourceTag.className = 'msg-source-tag';
-      sourceTag.textContent = `${msg.source === 'voice' ? '🎙️ 音声入力' : (isUser ? '💬 Web Chat' : '🤖 AI Response')} • ${msg.timestamp || new Date().toLocaleTimeString()}`;
+      sourceTag.textContent = `${msg.source === 'voice' ? '🎙️ 音声入力' : (msg.source === 'system' ? '🤖 起動案内' : (isUser ? '💬 Web Chat' : '🤖 AI Response'))} • ${msg.timestamp || new Date().toLocaleTimeString()}`;
 
       content.appendChild(bubble);
       content.appendChild(sourceTag);
@@ -2206,13 +2244,23 @@
           updatePlayerUI(data.player_status);
         }
         if (data.voice_status) {
-          updateVoiceStatus(data.voice_status);
+          updateVoiceStatus(data.voice_status, data.enable_voice_listener);
         }
         if (data.process_status) {
           updateProcessStatus(data.process_status);
         }
       } catch (e) {
         console.warn('Initial status fetch failed:', e);
+      }
+
+      try {
+        const resHist = await fetch('/api/history');
+        const histData = await resHist.json();
+        if (histData.history && Array.isArray(histData.history)) {
+          syncChatHistory(histData.history);
+        }
+      } catch (e) {
+        console.warn('Chat history fetch failed:', e);
       }
     }
 
