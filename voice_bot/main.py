@@ -48,7 +48,7 @@ def main():
         "--model", "--llm-model",
         type=str,
         default=None,
-        help=f"Ollama LLM model name (default: {config.LLM_MODEL})",
+        help=f"llama.cpp LLM model name (default: {config.LLM_MODEL})",
     )
     parser.add_argument(
         "--audio-dev",
@@ -191,7 +191,7 @@ def main():
     print(" 🎵 moOde AI Master (Voice & Web Chat Assistant)")
     print(f" 📂 設定ファイル: {cfg_banner}")
     print(f" 📡 moOde IP   : {config.MOODE_IP}:{config.MOODE_PORT}")
-    print(f" 🤖 LLM モデル : {config.LLM_MODEL} (Ollama)")
+    print(f" 🤖 LLM モデル : {config.LLM_MODEL} (llama.cpp)")
     print(f" 🔊 音声出力   : {config.AUDIO_OUTPUT_DEV}")
     print(f" {lang_banner}")
     print(f" ☀️ デイリー情報: {daily_info_banner}")

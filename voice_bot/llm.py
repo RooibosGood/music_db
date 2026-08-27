@@ -58,19 +58,14 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
             {"role": "user", "content": user_text},
         ],
         "stream": False,
-        "format": "json",
-        "think": False,
-        "keep_alive": "10m",
-        "options": {
-            "num_ctx": 2048,
-            "temperature": 0,
-            "num_predict": 192,
-        },
+        "temperature": 0,
+        "max_tokens": 192,
+        "response_format": {"type": "json_object"},
     }
 
     try:
-        response_json = http_post_json(config.OLLAMA_CHAT_URL, payload, timeout=60)
-        message = response_json.get("message", {})
+        response_json = http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=60)
+        message = response_json.get("choices", [{}])[0].get("message", {})
         response_text = message.get("content", "").strip()
         print(f"🤖 [LLM] 応答受信（{time.monotonic() - started_at:.1f}秒）: {response_text}", flush=True)
 
@@ -88,7 +83,7 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
                 continue
 
     except Exception as e:
-        print(f"⚠️ [LLM] Ollama接続エラー/フォールバック: {e}")
+        print(f"⚠️ [LLM] llama.cpp接続エラー/フォールバック: {e}")
 
     # フォールバック（キーワードベースの簡易判定）
     if any(k in user_text for k in ["止め", "ストップ", "停止"]):

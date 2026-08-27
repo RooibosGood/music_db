@@ -387,7 +387,7 @@ def convert_english_to_katakana(text: str) -> str:
     if not re.search(r"[A-Za-z]{2,}", converted):
         return converted
 
-    # 2. Ollama (LLM) による文脈カタカナ化
+    # 2. llama.cpp (LLM) による文脈カタカナ化
     try:
         payload = {
             "model": config.LLM_MODEL,
@@ -404,16 +404,11 @@ def convert_english_to_katakana(text: str) -> str:
                 {"role": "user", "content": converted},
             ],
             "stream": False,
-            "think": False,
-            "keep_alive": "10m",
-            "options": {
-                "num_ctx": 1024,
-                "temperature": 0,
-                "num_predict": 128,
-            },
+            "temperature": 0,
+            "max_tokens": 128,
         }
-        res_json = _http_post_json(config.OLLAMA_CHAT_URL, payload, timeout=4.0)
-        llm_reply = res_json.get("message", {}).get("content", "").strip()
+        res_json = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=4.0)
+        llm_reply = res_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         llm_reply = re.sub(r"<think>[\s\S]*?</think>", "", llm_reply).strip()
         llm_reply = llm_reply.replace("```", "").replace("\n", " ").strip()
         if llm_reply and len(llm_reply) >= len(converted) * 0.5:
@@ -559,7 +554,7 @@ def build_english_track_announcement(
             print(f"🎙️ [English DJ ナレーション (description_en)] {announcement}", flush=True)
             return announcement
 
-    # 2. description_en は無いが description_ja がある場合：LLM (Ollama) で英語DJ紹介文を生成
+    # 2. description_en は無いが description_ja がある場合：LLM (llama.cpp) で英語DJ紹介文を生成
     if desc_ja:
         try:
             prompt = (
@@ -574,8 +569,8 @@ def build_english_track_announcement(
                 "stream": False,
                 "options": {"num_ctx": 1024, "temperature": 0.3, "num_predict": 48},
             }
-            res = _http_post_json(config.OLLAMA_CHAT_URL, payload, timeout=2.5)
-            dj_line = res.get("message", {}).get("content", "").strip()
+            res = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=2.5)
+            dj_line = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
             dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
             if dj_line and len(dj_line) > 10:

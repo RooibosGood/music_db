@@ -4,8 +4,8 @@
     "port": 6600
   },
   "llm": {
-    "model": "qwen2.5:1.5b",
-    "ollama_chat_url": "http://localhost:11434/api/chat"
+    "model": "qwen2.5-1.5b-instruct",
+    "llama_cpp_chat_url": "http://localhost:8080/v1/chat/completions"
   },
   "announcement": {
     "language": "en",

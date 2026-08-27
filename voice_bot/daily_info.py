@@ -283,8 +283,8 @@ def generate_daily_intro(language: str = "en") -> str:
     )
     episode_text = episode_info.get("episode", "")
 
-    # Ollama LLM を使って自然で洗練されたナレーションを生成
-    broadcast_process_status("llm", "🤖 起動アナウンスを生成中 (Ollama)...")
+    # llama.cpp を使って自然で洗練されたナレーションを生成
+    broadcast_process_status("llm", "🤖 起動アナウンスを生成中 (llama.cpp)...")
 
     if language == "en":
         system_prompt = (
@@ -324,25 +324,20 @@ def generate_daily_intro(language: str = "en") -> str:
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
-        "think": False,
-        "keep_alive": "5m",
-        "options": {
-            "num_ctx": 2048,
-            "temperature": 0.5,
-            "num_predict": 180,
-        },
+        "temperature": 0.5,
+        "max_tokens": 180,
     }
 
     try:
         json_bytes = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
-            config.OLLAMA_CHAT_URL,
+            config.LLAMA_CPP_CHAT_URL,
             data=json_bytes,
             headers={"Content-Type": "application/json", "User-Agent": "moOde-AI-Master/1.0"},
         )
         with urllib.request.urlopen(req, timeout=12.0) as response:
             resp_data = json.loads(response.read().decode("utf-8"))
-            content = resp_data.get("message", {}).get("content", "").strip()
+            content = resp_data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
             # タグやMarkdownのクリーンアップ
             cleaned = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
@@ -353,7 +348,7 @@ def generate_daily_intro(language: str = "en") -> str:
                 return cleaned
 
     except Exception as e:
-        print(f"⚠️ [daily_info] Ollama ナレーション生成スキップ/フォールバック: {e}", flush=True)
+        print(f"⚠️ [daily_info] llama.cpp ナレーション生成スキップ/フォールバック: {e}", flush=True)
 
     # フォールバックテンプレート合成（Ollamaがオフラインまたはタイムアウト時）
     if language == "en":

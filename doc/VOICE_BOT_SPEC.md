@@ -16,7 +16,7 @@
   - PCやスマートフォンのWebブラウザからアクセス可能なグラスモフィズムUIを提供。
 - **完全ローカル / 高速エッジ処理**:
   - 音声認識: **faster-whisper**（Smallモデル / CPU int8）
-  - 意図抽出・対話: **Ollama (Qwen 2.5 1.5B)**
+  - 意図抽出・対話: **llama.cpp (Qwen 2.5 1.5B GGUF)**
   - 音声合成:
     - 英語DJモード: **edge-tts**（`en-US-ChristopherNeural`）/ Google TTS / espeak-ng
     - 日本語モード: **VOICEVOX**（キャラクター: 青山龍星）
@@ -57,7 +57,7 @@ package "Jetson Orin Nano Super (voice_bot) - Edge Layer" as edge_layer {
     }
 
     package "Core Processing Engine (llm.py)" as core_engine {
-        component "Ollama (LLM)\n意図解析 / JSON Mode\n(qwen2.5:1.5b)" as LLM_PARSER
+        component "llama.cpp (LLM)\n意図解析 / JSON Mode\n(Qwen 2.5 1.5B GGUF)" as LLM_PARSER
         component "ルールベース判定\n(フォールバック)" as FALLBACK
         component "moOde コントローラ\n(mpd_client.py)" as DISPATCHER
     }
@@ -120,7 +120,7 @@ Audio_SQL/
 │   ├── state.py            # 共有状態管理（WebSocketクライアントリスト、チャット履歴等）
 │   ├── broadcaster.py      # WebSocket リアルタイム配信 & 進行ステータス通知
 │   ├── daily_info.py       # 天気・日付・今日のエピソード取得 & 起動ナレーション生成
-│   ├── llm.py              # LLM 意図解析 (Ollama) & ユーザーリクエスト処理コア
+│   ├── llm.py              # LLM 意図解析 (llama.cpp) & ユーザーリクエスト処理コア
 │   ├── watcher.py          # トラック変更監視ループ (2曲目以降の自動解説) & 起動案内
 │   ├── stt.py              # 音声認識 (Whisperモデル、マイク録音、STT処理、音声ループ)
 │   ├── api.py              # FastAPI Web アプリケーション & REST/WebSocket エンドポイント
@@ -146,7 +146,7 @@ Audio_SQL/
 | :--- | :--- |
 | **`voice_bot_config.json`** | システム全体の設定ファイル。moOde IP・ポート、LLMモデル、アナウンス言語、オーディオデバイス、滋賀県栗東市等の天気設定、Webサーバー設定を管理。 |
 | **`voice_bot/config.py`** | `load_config_from_file()` による `voice_bot_config.json` の自動パース・反映および各種定数・デフォルト値管理。 |
-| **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、および Ollama LLM を用いた起動時デイリーナレーションの自動生成・フォールバック合成。 |
+| **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、および llama.cpp LLM を用いた起動時デイリーナレーションの自動生成・フォールバック合成。 |
 | **`voice_bot/state.py`** | `chat_history`, `active_websockets`, `voice_state`, `current_processing_state` の定義および同一曲判定ヘルパー `is_same_track()`。 |
 | **`voice_bot/broadcaster.py`** | `broadcast_event()`, `broadcast_process_status()`, `broadcast_status()` による WebSocket 全体へのリアルタイムプッシュ通信。 |
 | **`voice_bot/llm.py`** | `http_post_json()`, `parse_intent_with_llm()` による LLM 意図解析、および `process_user_message()` による音声・チャット共通処理エンジン。 |
@@ -171,8 +171,8 @@ CLI引数が同時に渡された場合は、CLI引数の値が優先されま�
     "port": 6600
   },
   "llm": {
-    "model": "qwen2.5:1.5b",
-    "ollama_chat_url": "http://localhost:11434/api/chat"
+    "model": "qwen2.5-1.5b-instruct",
+    "llama_cpp_chat_url": "http://localhost:8080/v1/chat/completions"
   },
   "announcement": {
     "language": "en",
@@ -218,7 +218,7 @@ CLI引数が同時に渡された場合は、CLI引数の値が優先されま�
 - **OS**: Ubuntu 22.04 LTS (JetPack 6.x) または Linux / Windows（開発用）
 - **Python**: 3.10 以上
 - **外部サービス・サーバー**:
-  - **Ollama**: `http://localhost:11434` (モデル: `qwen2.5:1.5b` または指定モデル)
+  - **llama.cpp**: `http://localhost:8080/v1` (モデル: 使用するGGUFモデル名)
   - **VOICEVOX Engine**: `http://localhost:50021` (話者ID: `13` 青山龍星)
   - **moOde audio (MPD)**: `192.168.68.198:6600` (設定変更可能)
 
@@ -296,7 +296,7 @@ moOde の再生進行をバックグラウンドスレッドで常時監視し�
 
 ### 5.4 LLM 意図解析 (`voice_bot/llm.py`)
 
-Ollama の JSON Mode を利用し、ユーザーの自然言語発話から構造化されたコマンドを抽出します。
+llama.cpp の OpenAI互換 JSON Mode を利用し、ユーザーの自然言語発話から構造化されたコマンドを抽出します。
 
 #### システムプロンプト設計
 ```json
@@ -381,7 +381,7 @@ ProcessCommand --> Idle : 処理実行・返答
    - **日本語**: **Wikipedia API**（X月X日の概要・記念日）から今日のトピック・記念日を抽出。
 
 #### 2. LLM による自然なナレーション文生成 (`generate_daily_intro`)
-- 収集した日付・天気・エピソード情報を **Ollama LLM (`config.LLM_MODEL`)** に渡し、初期挨拶に続く 2〜3文のラジオDJ / アシスタント風トークを自動生成。
+- 収集した日付・天気・エピソード情報を **llama.cpp LLM (`config.LLM_MODEL`)** に渡し、初期挨拶に続く 2〜3文のラジオDJ / アシスタント風トークを自動生成。
 - LLM オフライン時や応答遅延時は、定型テンプレート合成へ自動フォールバックし、停止することなく確実に案内を発話。
 
 ---
@@ -493,7 +493,7 @@ python -m voice_bot --moode-ip 192.168.1.50 --port 8080
 | `--ja` | `--japanese` | フラグ | - | **日本語モード**で起動（`description_ja` を VOICEVOX で再生） |
 | `--mic` | `--enable-mic`, `--voice` | フラグ | `False` | **マイク音声入力を有効化**（「ヘイ、マスター」待機ループを起動） |
 | `--no-mic` | `--no-voice` | フラグ | `True` | **マイク音声入力を無効化**（Webチャット専用モード） |
-| `--model` | `--llm-model` | `string` | `qwen2.5:1.5b` | Ollama LLM モデル名 |
+| `--model` | `--llm-model` | `string` | `qwen2.5-1.5b-instruct` | llama.cpp LLM モデル名 |
 | `--moode-ip` | - | `string` | `192.168.68.198` | moOde audio (Raspberry Pi) の IP アドレス |
 | `--moode-port`| - | `int` | `6600` | moOde audio の MPD ポート番号 |
 | `--audio-dev` | - | `string` | `None`（自動検出） | 音声出力先 ALSA デバイス（例: `plughw:1,0`, `default`） |

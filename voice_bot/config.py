@@ -14,9 +14,9 @@ MOODE_PORT: int = 6600
 
 # ==================== 音声合成 / LLM 設定 ====================
 VOICEVOX_URL: str = "http://localhost:50021"
-OLLAMA_CHAT_URL: str = "http://localhost:11434/api/chat"
+LLAMA_CPP_CHAT_URL: str = "http://localhost:8080/v1/chat/completions"
 SPEAKER_ID: int = 13  # 青山龍星（落ち着いた男性音声）
-LLM_MODEL: str = "qwen2.5:1.5b"
+LLM_MODEL: str = "qwen2.5-1.5b-instruct"
 ANNOUNCE_LANGUAGE: str = "en"  # 曲紹介の言語: "en" (英語DJモード) または "ja" (日本語)
 ENGLISH_VOICE: str = "en-US-ChristopherNeural"  # 英語ラジオDJ風ニューラル音声 (edge-tts)
 
@@ -64,7 +64,7 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
     import json
     import os
 
-    global MOODE_IP, MOODE_PORT, VOICEVOX_URL, OLLAMA_CHAT_URL, SPEAKER_ID, LLM_MODEL
+    global MOODE_IP, MOODE_PORT, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
     global ANNOUNCE_LANGUAGE, ENGLISH_VOICE, AUDIO_OUTPUT_NAME, AUDIO_OUTPUT_DEV
     global VOICE_PRE_SILENCE_SEC, INPUT_DEVICE_NAME, INPUT_DEVICE_INDEX
     global ENABLE_DAILY_INFO, WEATHER_CITY, WEATHER_CITY_JA, WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_TIMEZONE
@@ -106,8 +106,8 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
         llm_cfg = data.get("llm", {})
         if "model" in llm_cfg:
             LLM_MODEL = str(llm_cfg["model"])
-        if "ollama_chat_url" in llm_cfg:
-            OLLAMA_CHAT_URL = str(llm_cfg["ollama_chat_url"])
+        if "llama_cpp_chat_url" in llm_cfg:
+            LLAMA_CPP_CHAT_URL = str(llm_cfg["llama_cpp_chat_url"])
 
         # アナウンス・音声合成設定
         ann_cfg = data.get("announcement", {})
