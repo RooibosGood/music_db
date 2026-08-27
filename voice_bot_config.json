@@ -4,7 +4,7 @@
     "port": 6600
   },
   "llm": {
-    "model": "qwen2.5-1.5b-instruct",
+    "model": "Qwen_Qwen3-4B-Q4_K_M",
     "llama_cpp_chat_url": "http://localhost:8080/v1/chat/completions"
   },
   "announcement": {

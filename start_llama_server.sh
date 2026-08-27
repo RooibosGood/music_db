@@ -14,12 +14,12 @@ fi
 
 # 2. モデルファイル候補の探索リスト
 TARGET_MODELS=(
+  "Qwen_Qwen3-4B-Q4_K_M.gguf"
+  "qwen_qwen3-4b-q4_k_m.gguf"
   "qwen2.5-1.5b-instruct-q4_k_m.gguf"
   "qwen2.5-1.5b-instruct.gguf"
   "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
-  "Qwen2.5-1.5B-Instruct.gguf"
   "gemma-2-2b-it-Q4_K_M.gguf"
-  "google_gemma-4-E2B-it-Q4_K_M.gguf"
 )
 
 CANDIDATE_PATHS=()

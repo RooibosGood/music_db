@@ -16,7 +16,7 @@ MOODE_PORT: int = 6600
 VOICEVOX_URL: str = "http://localhost:50021"
 LLAMA_CPP_CHAT_URL: str = "http://localhost:8080/v1/chat/completions"
 SPEAKER_ID: int = 13  # 青山龍星（落ち着いた男性音声）
-LLM_MODEL: str = "qwen2.5-1.5b-instruct"
+LLM_MODEL: str = "Qwen_Qwen3-4B-Q4_K_M"
 ANNOUNCE_LANGUAGE: str = "en"  # 曲紹介の言語: "en" (英語DJモード) または "ja" (日本語)
 ENGLISH_VOICE: str = "en-US-ChristopherNeural"  # 英語ラジオDJ風ニューラル音声 (edge-tts)
 
