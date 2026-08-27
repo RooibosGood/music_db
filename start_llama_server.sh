@@ -28,6 +28,8 @@ fi
 
 # 代表的な配置場所を探索
 CANDIDATE_PATHS+=(
+  "$HOME/LLM/model/$TARGET_MODEL_NAME"
+  "$HOME/LLM/models/$TARGET_MODEL_NAME"
   "$HOME/model/$TARGET_MODEL_NAME"
   "$HOME/models/$TARGET_MODEL_NAME"
   "$HOME/Audio_SQL/model/$TARGET_MODEL_NAME"
@@ -48,13 +50,13 @@ done
 
 # もし特定モデルが見つからなければ、周辺ディレクトリの任意の .gguf を自動探索
 if [ -z "$CHOSEN_MODEL" ]; then
-  SEARCH_DIRS=("$HOME/model" "$HOME/models" "$SCRIPT_DIR/.." "$SCRIPT_DIR/../.." "$SCRIPT_DIR")
+  SEARCH_DIRS=("$HOME/LLM/model" "$HOME/LLM/models" "$HOME/model" "$HOME/models" "$SCRIPT_DIR/.." "$SCRIPT_DIR/../.." "$SCRIPT_DIR")
   for d in "${SEARCH_DIRS[@]}"; do
     if [ -d "$d" ]; then
       FOUND_GGUF=$(find "$d" -maxdepth 2 -name "*.gguf" 2>/dev/null | head -n 1 || true)
       if [ -n "$FOUND_GGUF" ] && [ -f "$FOUND_GGUF" ]; then
         CHOSEN_MODEL="$(realpath "$FOUND_GGUF")"
-        echo "💡 周辺ディレクトリから GGUF モデルを自動検出しました: $CHOSEN_MODEL"
+        echo "💡 GGUF モデルを自動検出しました: $CHOSEN_MODEL"
         break
       fi
     fi
