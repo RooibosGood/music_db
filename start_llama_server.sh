@@ -13,7 +13,15 @@ if [ ! -x "$LLAMA_SERVER_BIN" ]; then
 fi
 
 # 2. モデルファイル候補の探索リスト
-TARGET_MODEL_NAME="google_gemma-4-E2B-it-Q4_K_M.gguf"
+TARGET_MODELS=(
+  "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+  "qwen2.5-1.5b-instruct.gguf"
+  "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
+  "Qwen2.5-1.5B-Instruct.gguf"
+  "gemma-2-2b-it-Q4_K_M.gguf"
+  "google_gemma-4-E2B-it-Q4_K_M.gguf"
+)
+
 CANDIDATE_PATHS=()
 
 # コマンドライン引数 ($1) が指定された場合を最優先
@@ -26,18 +34,14 @@ if [ -n "${MODEL_PATH:-}" ]; then
   CANDIDATE_PATHS+=("$MODEL_PATH")
 fi
 
-# 代表的な配置場所を探索
-CANDIDATE_PATHS+=(
-  "$HOME/LLM/model/$TARGET_MODEL_NAME"
-  "$HOME/LLM/models/$TARGET_MODEL_NAME"
-  "$HOME/model/$TARGET_MODEL_NAME"
-  "$HOME/models/$TARGET_MODEL_NAME"
-  "$HOME/Audio_SQL/model/$TARGET_MODEL_NAME"
-  "$SCRIPT_DIR/../model/$TARGET_MODEL_NAME"
-  "$SCRIPT_DIR/../../model/$TARGET_MODEL_NAME"
-  "$SCRIPT_DIR/model/$TARGET_MODEL_NAME"
-  "/model/$TARGET_MODEL_NAME"
-)
+# 代表的な配置場所と対象モデルの組み合わせを探索
+SEARCH_DIRS=("$HOME/LLM/model" "$HOME/LLM/models" "$HOME/model" "$HOME/models" "$HOME/Audio_SQL/model" "$SCRIPT_DIR/../model" "$SCRIPT_DIR/../../model" "$SCRIPT_DIR/model")
+
+for d in "${SEARCH_DIRS[@]}"; do
+  for m in "${TARGET_MODELS[@]}"; do
+    CANDIDATE_PATHS+=("$d/$m")
+  done
+done
 
 # 候補から実在するファイルを検索
 CHOSEN_MODEL=""
@@ -48,9 +52,8 @@ for p in "${CANDIDATE_PATHS[@]}"; do
   fi
 done
 
-# もし特定モデルが見つからなければ、周辺ディレクトリの任意の .gguf を自動探索
+# もし特定モデルが見つからなければ、ディレクトリ内の任意の .gguf を自動探索
 if [ -z "$CHOSEN_MODEL" ]; then
-  SEARCH_DIRS=("$HOME/LLM/model" "$HOME/LLM/models" "$HOME/model" "$HOME/models" "$SCRIPT_DIR/.." "$SCRIPT_DIR/../.." "$SCRIPT_DIR")
   for d in "${SEARCH_DIRS[@]}"; do
     if [ -d "$d" ]; then
       FOUND_GGUF=$(find "$d" -maxdepth 2 -name "*.gguf" 2>/dev/null | head -n 1 || true)
