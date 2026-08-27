@@ -2,24 +2,32 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LLAMA_BIN_DIR="${LLAMA_BIN_DIR:-$HOME/llama.cpp/build/bin}"
 
-# 1. バイナリの解決
-LLAMA_SERVER_BIN="$LLAMA_BIN_DIR/llama-server"
-if [ ! -x "$LLAMA_SERVER_BIN" ]; then
-  if command -v llama-server >/dev/null 2>&1; then
-    LLAMA_SERVER_BIN="$(command -v llama-server)"
+# 1. バイナリの解決（~/LLM/llama.cpp を最優先）
+LLAMA_BIN_CANDIDATES=(
+  "$HOME/LLM/llama.cpp/build/bin/llama-server"
+  "$HOME/llama.cpp/build/bin/llama-server"
+  "${LLAMA_BIN_DIR:-$HOME/LLM/llama.cpp/build/bin}/llama-server"
+)
+
+LLAMA_SERVER_BIN=""
+for b in "${LLAMA_BIN_CANDIDATES[@]}"; do
+  if [ -x "$b" ]; then
+    LLAMA_SERVER_BIN="$b"
+    break
   fi
+done
+
+if [ -z "$LLAMA_SERVER_BIN" ] && command -v llama-server >/dev/null 2>&1; then
+  LLAMA_SERVER_BIN="$(command -v llama-server)"
 fi
 
 # 2. モデルファイル候補の探索リスト
 TARGET_MODELS=(
+  "google_gemma-4-E2B-it-Q4_K_M.gguf"
   "Qwen_Qwen3-4B-Q4_K_M.gguf"
-  "qwen_qwen3-4b-q4_k_m.gguf"
   "qwen2.5-1.5b-instruct-q4_k_m.gguf"
   "qwen2.5-1.5b-instruct.gguf"
-  "Qwen2.5-1.5B-Instruct-Q4_K_M.gguf"
-  "gemma-2-2b-it-Q4_K_M.gguf"
 )
 
 CANDIDATE_PATHS=()
@@ -69,7 +77,7 @@ fi
 echo "=========================================="
 echo " 🚀 llama-server 起動スクリプト"
 echo " 📂 モデルパス : ${CHOSEN_MODEL:-未検出}"
-echo " 📂 バイナリ   : $LLAMA_SERVER_BIN"
+echo " 📂 バイナリ   : ${LLAMA_SERVER_BIN:-未検出}"
 echo " 📡 エンドポイント: http://0.0.0.0:8080/v1"
 echo "=========================================="
 
@@ -79,7 +87,7 @@ if [ -z "$CHOSEN_MODEL" ] || [ ! -f "$CHOSEN_MODEL" ]; then
   echo "以下のいずれかの方法でモデルを指定してください:"
   echo " 1. 引数で直接指定: bash start_llama_server.sh /path/to/model.gguf"
   echo " 2. 環境変数で指定: MODEL_PATH=/path/to/model.gguf bash start_llama_server.sh"
-  echo " 3. ~/model/ ディレクトリに .gguf ファイルを配置"
+  echo " 3. ~/LLM/model/ ディレクトリに .gguf ファイルを配置"
   echo ""
   echo "🔍 探索したパス:"
   for p in "${CANDIDATE_PATHS[@]}"; do
@@ -88,15 +96,15 @@ if [ -z "$CHOSEN_MODEL" ] || [ ! -f "$CHOSEN_MODEL" ]; then
   exit 1
 fi
 
-if [ ! -x "$LLAMA_SERVER_BIN" ]; then
-  echo "❌ [エラー] llama-server バイナリが見つかりません: $LLAMA_SERVER_BIN"
+if [ -z "$LLAMA_SERVER_BIN" ] || [ ! -x "$LLAMA_SERVER_BIN" ]; then
+  echo "❌ [エラー] llama-server バイナリが見つかりません: ${LLAMA_SERVER_BIN:-未検出}"
   echo "   llama.cpp をビルドするか、LLAMA_BIN_DIR環境変数を指定してください。"
   exit 1
 fi
 
-# 3. GPU オフロード層数とコンテキスト長（OOM防止のための最適化設定）
-N_GPU_LAYERS="${N_GPU_LAYERS:-28}"
-CTX_SIZE="${CTX_SIZE:-1024}"
+# 3. 起動パラメータ（Jetson 最適化設定）
+N_GPU_LAYERS="${N_GPU_LAYERS:-99}"
+CTX_SIZE="${CTX_SIZE:-2048}"
 
 echo " ⚙️ GPU オフロード: $N_GPU_LAYERS 層"
 echo " ⚙️ コンテキスト長: $CTX_SIZE"
@@ -107,9 +115,8 @@ exec "$LLAMA_SERVER_BIN" \
   --port 8080 \
   -ngl "$N_GPU_LAYERS" \
   -c "$CTX_SIZE" \
-  -b 512 \
-  -ub 256 \
-  --flash-attn \
-  --threads 4
+  --no-mmap \
+  -fa on \
+  -t 4
 
 

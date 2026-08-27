@@ -16,7 +16,7 @@
   - PCやスマートフォンのWebブラウザからアクセス可能なグラスモフィズムUIを提供。
 - **完全ローカル / 高速エッジ処理**:
   - 音声認識: **faster-whisper**（Smallモデル / CPU int8）
-  - 意図抽出・対話: **llama.cpp (Qwen 3 4B GGUF)**
+  - 意図抽出・対話: **llama.cpp (Google Gemma 4 E2B IT GGUF)**
   - 音声合成:
     - 英語DJモード: **edge-tts**（`en-US-ChristopherNeural`）/ Google TTS / espeak-ng
     - 日本語モード: **VOICEVOX**（キャラクター: 青山龍星）

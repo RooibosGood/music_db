@@ -4,7 +4,7 @@
     "port": 6600
   },
   "llm": {
-    "model": "Qwen_Qwen3-4B-Q4_K_M",
+    "model": "google_gemma-4-E2B-it-Q4_K_M.gguf",
     "llama_cpp_chat_url": "http://localhost:8080/v1/chat/completions"
   },
   "announcement": {
