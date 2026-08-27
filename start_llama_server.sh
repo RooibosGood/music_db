@@ -94,12 +94,22 @@ if [ ! -x "$LLAMA_SERVER_BIN" ]; then
   exit 1
 fi
 
+# 3. GPU オフロード層数とコンテキスト長（OOM防止のための最適化設定）
+N_GPU_LAYERS="${N_GPU_LAYERS:-28}"
+CTX_SIZE="${CTX_SIZE:-1024}"
+
+echo " ⚙️ GPU オフロード: $N_GPU_LAYERS 層"
+echo " ⚙️ コンテキスト長: $CTX_SIZE"
+
 exec "$LLAMA_SERVER_BIN" \
   -m "$CHOSEN_MODEL" \
   --host 0.0.0.0 \
   --port 8080 \
-  -ngl 99 \
-  -c 2048 \
+  -ngl "$N_GPU_LAYERS" \
+  -c "$CTX_SIZE" \
+  -b 512 \
+  -ub 256 \
+  --flash-attn \
   --threads 4
 
 
