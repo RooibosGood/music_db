@@ -1,7 +1,7 @@
 """moOde 音声ボット デイリーインフォメーション（日付・天気・今日のエピソード）モジュール。
 
 Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、
-および Ollama LLM を用いた自然なラジオDJ/アシスタント風ナレーション生成を提供します。
+および llama-server (llama.cpp) を用いた自然なラジオDJ/アシスタント風ナレーション生成を提供します。
 """
 
 import datetime
@@ -350,7 +350,7 @@ def generate_daily_intro(language: str = "en") -> str:
     except Exception as e:
         print(f"⚠️ [daily_info] llama.cpp ナレーション生成スキップ/フォールバック: {e}", flush=True)
 
-    # フォールバックテンプレート合成（Ollamaがオフラインまたはタイムアウト時）
+    # フォールバックテンプレート合成（llama-server がオフラインまたはタイムアウト時）
     if language == "en":
         return f"Today is {date_str}. {weather_summary} By the way, {episode_text}"
     else:

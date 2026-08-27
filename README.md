@@ -108,9 +108,31 @@ python build_music_db.py --flac-only --limit 0 --reset
 
 ---
 
-## メタデータクリーンアップ・修復ツール (`cleanup_long_tracks.py`)
+## メタデータクリーンアップ・修復ツール (`cleanup_long_tracks.py` / `fix_descriptions.py`)
 
-長尺音源の削除に加えて、年号の異常修復や英語解説文のクリーンアップを行える専用メンテナンスツールです。
+### 1. 楽曲解説文（JA/EN）の中国語・メタ発言・構文ゴミ修復 (`fix_descriptions.py`)
+`description_ja` 内の中国語混入（純中国語文、日中混在構文、簡体字）や、`description_en` 内のLLMメタ発言（`Here's...`, `(Note:...)`）、構文ゴミ（`",`, `: " "`）を高精度に検出・修復する専用ツールです。
+
+```bash
+# 1. 構文ゴミ・年号のルールベースクリーンアップを高速実行（LLM不使用）
+python fix_descriptions.py --clean-syntax-only -y
+
+# 2. 日本語解説文 (description_ja) の中国語・異常をLLMで修復（テストプレビュー）
+python fix_descriptions.py --ja --limit 5 --dry-run
+
+# 3. 日本語解説文 (description_ja) の全件修復
+python fix_descriptions.py --ja -y
+
+# 4. 英語解説文 (description_en) の日中文字・メタ発言の全件修復
+python fix_descriptions.py --en -y
+
+# 5. 全体一括修復（構文クリーンアップ + JA修復 + EN修復）
+python fix_descriptions.py --all -y
+```
+
+### 2. 長尺音源・年号クリーンアップ (`cleanup_long_tracks.py`)
+
+長尺音源の削除に加えて、年号の異常修復や英語解説文のクリーンアップを行えるメンテナンスツールです。
 
 ```bash
 # 1. すべてのクリーンアップを一括実行（長尺音源削除・年号修復・英語解説文修復）

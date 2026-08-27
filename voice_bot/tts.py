@@ -407,14 +407,15 @@ def convert_english_to_katakana(text: str) -> str:
             "temperature": 0,
             "max_tokens": 128,
         }
-        res_json = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=4.0)
+        res_json = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=6.0)
         llm_reply = res_json.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
         llm_reply = re.sub(r"<think>[\s\S]*?</think>", "", llm_reply).strip()
         llm_reply = llm_reply.replace("```", "").replace("\n", " ").strip()
         if llm_reply and len(llm_reply) >= len(converted) * 0.5:
             print(f"🔤 [Kana] 英語カタカナ変換: '{text}' ➔ '{llm_reply}'", flush=True)
             return llm_reply
-    except Exception:
+    except Exception as e:
+        # LLMでの変換がタイムアウト・エラーの場合は辞書置換結果のまま進める
         pass
 
     return converted
@@ -567,17 +568,19 @@ def build_english_track_announcement(
                 "model": config.LLM_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"num_ctx": 1024, "temperature": 0.3, "num_predict": 48},
+                "temperature": 0.3,
+                "max_tokens": 64,
             }
-            res = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=2.5)
+            res = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=8.0)
             dj_line = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
             dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
             dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
             if dj_line and len(dj_line) > 10:
                 print(f"🎙️ [English DJ ナレーション (LLM生成)] '{dj_line}'", flush=True)
                 return dj_line
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"⚠️ [tts] llama.cpp 英語DJ紹介文生成スキップ/フォールバック: {e}", flush=True)
+
 
     # 3. テンプレートによる補完
     extra = ""

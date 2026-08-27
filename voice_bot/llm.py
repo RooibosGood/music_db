@@ -64,7 +64,21 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
     }
 
     try:
-        response_json = http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=60)
+        try:
+            response_json = http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=60)
+        except Exception as post_err:
+            # response_format や system ロール非対応環境向けの再試行
+            payload_fallback = {
+                "model": config.LLM_MODEL,
+                "messages": [
+                    {"role": "user", "content": f"{system_prompt}\n\nユーザーリクエスト: {user_text}"},
+                ],
+                "stream": False,
+                "temperature": 0,
+                "max_tokens": 192,
+            }
+            response_json = http_post_json(config.LLAMA_CPP_CHAT_URL, payload_fallback, timeout=60)
+
         message = response_json.get("choices", [{}])[0].get("message", {})
         response_text = message.get("content", "").strip()
         print(f"🤖 [LLM] 応答受信（{time.monotonic() - started_at:.1f}秒）: {response_text}", flush=True)

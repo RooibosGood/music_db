@@ -108,6 +108,9 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
             LLM_MODEL = str(llm_cfg["model"])
         if "llama_cpp_chat_url" in llm_cfg:
             LLAMA_CPP_CHAT_URL = str(llm_cfg["llama_cpp_chat_url"])
+        elif "ollama_chat_url" in llm_cfg:
+            print("⚠️ [config] 旧設定 'ollama_chat_url' が検出されました。llama-server 用エンドポイント (http://localhost:8080/v1/chat/completions) に自動移行します。")
+            LLAMA_CPP_CHAT_URL = "http://localhost:8080/v1/chat/completions"
 
         # アナウンス・音声合成設定
         ann_cfg = data.get("announcement", {})

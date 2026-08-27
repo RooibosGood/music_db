@@ -183,7 +183,7 @@ LIMIT 10;
 
 ### 4.4 LLM / Text-to-SQL（自然言語検索）用プロンプト定義
 
-Jetson 上でローカルLLM（Ollama, vLLM, NanoLLM 等）を使って「ユーザーの自然言語の要望からSQLを生成する」場合のシステムプロンプト定義例です。
+Jetson 上でローカルLLM（llama-server, llama.cpp, vLLM 等）を使って「ユーザーの自然言語の要望からSQLを生成する」場合のシステムプロンプト定義例です。
 
 ```text
 You are an expert SQL assistant for a music database.
