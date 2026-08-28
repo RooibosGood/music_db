@@ -19,6 +19,8 @@ import argparse
 import time
 import json
 import urllib.request
+import subprocess
+import unicodedata
 import traceback
 from pathlib import Path
 
@@ -38,12 +40,8 @@ HIRAGANA_REGEX = re.compile(r'[\u3040-\u309F]')
 KATAKANA_REGEX = re.compile(r'[\u30A0-\u30FF]')
 CJK_REGEX = re.compile(r'[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]')
 
-# 日本語では基本的に使用されない明確な簡体字
-SIMPLIFIED_CHINESE_CHARS = set(
-    "这为发产并关兴写农凉减凤凭凯创动华单变响广张弹总执摇杂标条极样桥历汉汤波滥爱脸谱质载轻边达运进连选释钟录键"
-    "录乐发专辑创现编词简欢听众动带历摇滚队艺术响标志质轻运连选钟键们为产关兴写单变总执样桥气汤滥脸谱载边达进释"
-    "说话让给从对岁时后当时之后由在与和它她他您么吗呢吧着得过把被"
-)
+# 日本語では基本的に使用されない明確な簡体字（常用漢字・人名用漢字との重複を排除）
+SIMPLIFIED_CHINESE_STRICT_CHARS = set("这为动华响张弹杂汉脸谱编词简欢听众带滚队术们说话么吗呢吧")
 
 # 明確な中国語構文・語彙パターン (description_ja 内の中国語混入を精密検出)
 ZH_SYNTAX_WORDS_REGEX = re.compile(
@@ -53,32 +51,74 @@ ZH_SYNTAX_WORDS_REGEX = re.compile(
     r'不仅.*而且|不仅如此|乐手|主唱|吉他手|贝斯手|鼓手|老鹰乐队|'
     r'经典之作|代表性作品|里程碑式|'
     r'的一首|是一首|是一支|的专辑|中的一首|作为.*的一首|'
-    r'充满力量感|旋律优美|节奏感强|独特的旋律|深情的演唱|现场专辑|现场版|'
-    r'[\u4e00-\u9fa5]{2,}[的是在了和与被把让从到对][\u4e00-\u9fa5]{2,})'
+    r'充满力量感|旋律优美|节奏感强|独特的旋律|深情的演唱|现场专辑|现场版)'
 )
 
-# LLMメタ発言・プロンプト漏れ・ゴミテキスト
-LLM_META_REGEX = re.compile(
-    r'(here is|here\'s|alternatively|let me know|if you\'d like|if you need|note:|note :|option \d|'
-    r'i rewrote|i have rewritten|natural english|standard english|as requested|'
-    r'japanese:|english:|description:|explanation:|translate|translation|'
-    r'best regards|\[your name\]|\[your contact|\[your email|\[your phone|'
-    r'以下是|这是|中文|日文|英文|```|不，|请注意|注意：|注：|当然|这篇|介绍|'
-    r'json|performperf|performper)',
+# description_ja 用のLLMメタ発言・プロンプト漏れ・ゴミテキスト
+JA_LLM_META_REGEX = re.compile(
+    r'(?:^|\n)\s*(?:Here\s+(?:is|are)|Here\'s|Note\s*:|Option\s*\d|Alternatively|I rewrote|As requested|'
+    r'Japanese\s*:|English\s*:|Description\s*:|Explanation\s*:|Translation\s*:|'
+    r'以下[はのは]|これは|不，|请注意|注意[：:]|注[：:])'
+    r'|```'
+    r'|(?:\[Your Name\]|\[Your Contact|\[Your Email|\[Your Phone|Best regards|Please let me know if you need)'
+    r'|\b(?:performperf|performper)\b',
     re.IGNORECASE
 )
 
+# description_en 用のLLMメタ発言・プロンプト漏れ・ゴミテキスト
+EN_LLM_META_REGEX = re.compile(
+    r'(?:^|\n)\s*(?:Here\s+(?:is|are)|Here\'s\s+(?:a|the|an|your)|Note\s*:|Option\s*\d|Alternatively|'
+    r'I rewrote|I have rewritten|Natural english|Standard english|As requested|'
+    r'Japanese\s*:|English\s*:|Description\s*:|Explanation\s*:|Translation\s*:|Below is)'
+    r'|```'
+    r'|(?:\[Your Name\]|\[Your Contact|\[Your Email|\[Your Phone|Best regards|Please let me know if you need|Let me know if you\b)'
+    r'|\b(?:performperf|performper)\b',
+    re.IGNORECASE
+)
+
+# 一般的な日本語アーティスト名・曲名のローマ字フォールバック辞書
+COMMON_ROMAJI_MAP = {
+    "安全地帯": "Anzen Chitai",
+    "玉置浩二": "Koji Tamaki",
+    "中島みゆき": "Miyuki Nakajima",
+    "大野雄二": "Yuji Ohno",
+    "サンボマスター": "Sambomaster",
+    "スピッツ": "Spitz",
+    "じれったい": "Jirettai",
+    "やせっぽちの星": "Yaseppochi no Hoshi",
+    "発散だー!!": "Hassan da-!!",
+    "さよならゲーム": "Sayonara Game",
+    "日本武道館": "Nippon Budokan",
+    "甲子園球場": "Koshien Stadium",
+    "その景色を": "Sono Keshiki o",
+    "此の手は離せない": "Kono Te wa Hanasenai",
+    "いそしぎ(日本語ヴァージョン)": "Isoshigi (Japanese Version)",
+    "いそしぎ": "Isoshigi",
+    "凛": "Rin"
+}
+
 
 def get_lemonade_model(base_url: str = LEMONADE_BASE_URL) -> str:
-    """Lemonade Server からアクティブなモデル名を取得"""
+    """Lemonade Server からロード中のモデル名を正確に取得"""
+    valid_models = []
     try:
         req = urllib.request.Request(f"{base_url}/models", headers={"User-Agent": "fix-descriptions-script"})
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read().decode('utf-8'))
-            if "data" in data and len(data["data"]) > 0:
-                return data["data"][0]["id"]
+            valid_models = [m["id"] for m in data.get("data", [])]
     except Exception:
         pass
+
+    try:
+        out = subprocess.check_output(["lemonade", "status"], text=True, encoding="utf-8", errors="ignore")
+        for m in valid_models:
+            if m in out:
+                return m
+    except Exception:
+        pass
+
+    if valid_models:
+        return valid_models[0]
     return "Meta-Llama-3.1-8B-Instruct-Hybrid"
 
 
@@ -128,8 +168,17 @@ def clean_syntax_garbage(text: str) -> str:
         return text
 
     t = text.strip()
-    # マークダウンコードブロック除去
+    # 閉じられていない ``` や ```json を含むマークダウン除去
     t = re.sub(r'```[\s\S]*?```', '', t)
+    t = re.sub(r'```(?:json)?[\s\S]*$', '', t, flags=re.IGNORECASE)
+
+    # 句点「。」の後に続くゴミ（例: `。 json`, `。 }`, `。 ```json` 等）を削除
+    t = re.sub(r'(?<=。)\s*(?:```|json|\{|\}|"|\'|assistant|user|\s*)+$', '', t, flags=re.IGNORECASE)
+
+    # 末尾の単独 json や JSON記号の除去
+    t = re.sub(r'\s*\bjson\b[\s\S]*$', '', t, flags=re.IGNORECASE)
+    t = re.sub(r'\s*\{[\s\S]*$', '', t)
+
     # エスケープされた引用符の解除
     t = t.replace('\\"', '"').replace("\\'", "'")
     
@@ -163,7 +212,7 @@ def check_ja_issues(text: str) -> list:
     has_hira = bool(HIRAGANA_REGEX.search(text))
     has_cjk = bool(CJK_REGEX.search(text))
     zh_syntax = ZH_SYNTAX_WORDS_REGEX.findall(text)
-    sim_chars = [c for c in text if c in SIMPLIFIED_CHINESE_CHARS]
+    strict_sim = [c for c in text if c in SIMPLIFIED_CHINESE_STRICT_CHARS]
 
     # 1. ひらがなが存在せず漢字のみ -> 純中国語文
     if not has_hira and has_cjk:
@@ -171,16 +220,16 @@ def check_ja_issues(text: str) -> list:
     # 2. 中国語構文・語彙が含まれる -> 日中混在文
     elif zh_syntax:
         reasons.append("mixed_chinese_syntax")
-    # 3. 簡体字が複数含まれる
-    elif len(sim_chars) >= 2:
+    # 3. 明確な簡体字が含まれる
+    elif strict_sim:
         reasons.append("simplified_chinese_chars")
 
     # 4. LLMメタ発言
-    if LLM_META_REGEX.search(text):
+    if JA_LLM_META_REGEX.search(text):
         reasons.append("llm_meta_junk")
 
-    # 5. 文字化け・壊れたテキスト
-    if '\ufffd' in text or len(text.strip()) < 10 or '' in text:
+    # 5. 文字化け・短すぎる壊れたテキスト
+    if '\ufffd' in text or len(text.strip()) < 10:
         reasons.append("mojibake_or_broken")
 
     return reasons
@@ -201,12 +250,12 @@ def check_en_issues(text: str) -> list:
         reasons.append("contains_cjk_or_japanese")
 
     # 2. LLMメタ発言
-    if LLM_META_REGEX.search(text):
+    if EN_LLM_META_REGEX.search(text):
         reasons.append("llm_meta_junk")
 
     # 3. 文字化け・短すぎる壊れたテキスト・異常な繰り返し
     words = re.findall(r'[A-Za-z]{3,}', text)
-    if '\ufffd' in text or '' in text or len(text.strip()) < 15 or len(words) < 4:
+    if '\ufffd' in text or len(text.strip()) < 15 or len(words) < 4:
         reasons.append("malformed_or_broken")
 
     return reasons
@@ -283,7 +332,7 @@ def clean_syntax_all(db_path: str = DB_PATH, dry_run: bool = False, auto_confirm
 
 
 def call_llm(messages: list, active_model: str, base_url: str = LEMONADE_BASE_URL, max_tokens: int = 150) -> str:
-    """Lemonade Server に推論リクエストを送信 (stop sequence を設定して会話ループを遮断)"""
+    """Lemonade Server に推論リクエストを送信"""
     payload = {
         "model": active_model,
         "messages": messages,
@@ -296,7 +345,7 @@ def call_llm(messages: list, active_model: str, base_url: str = LEMONADE_BASE_UR
         headers={"Content-Type": "application/json", "User-Agent": "fix-descriptions-script"},
         data=json.dumps(payload).encode('utf-8')
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         res_data = json.loads(resp.read().decode('utf-8'))
         return res_data["choices"][0]["message"]["content"].strip()
 
@@ -306,15 +355,19 @@ def extract_clean_text(raw_text: str, is_ja: bool = True) -> str:
     if not raw_text:
         return ""
 
+    # パイプ | 以降のゴミを即座に切断
+    t = re.split(r'\s*\|\s*', raw_text)[0]
+
     # User: や Note: 以降をカット
     cut_patterns = [
-        r'\n\s*(?:User|Assistant|Human|Note|Option\s*\d|Alternatively|Let me know|If you|Here is|Here\'s)\b.*$',
+        r'\n\s*(?:User|Assistant|Human|Note|Option\s*\d|Alternatively|Let me know|If you|Here is|Here\'s|However|Please|The lyrics|Final Answer)\b.*$',
         r'(?:User|Assistant|Human)\s*:.*$',
         r'【(?:厳格|楽曲|注意).*$',
         r'\(Note:.*?\)',
-        r'\(注:.*?\)'
+        r'\(注:.*?\)',
+        r'\(Shortened Version\).*$',
+        r'\(Alternative.*?\).*$'
     ]
-    t = raw_text
     for cp in cut_patterns:
         t = re.split(cp, t, flags=re.IGNORECASE | re.DOTALL)[0]
 
@@ -327,8 +380,25 @@ def extract_clean_text(raw_text: str, is_ja: bool = True) -> str:
     for pp in prefix_patterns:
         t = re.sub(pp, '', t, flags=re.IGNORECASE).strip()
 
+    if not is_ja:
+        # 英文の場合: 文分割して最初の1〜2文のみを抽出
+        sentences = re.split(r'(?<=[.!?])\s+', t.strip())
+        valid_sentences = [
+            s.strip() for s in sentences 
+            if s.strip() and not re.search(r'^(?:Note|However|Alternatively|Please|Let me know|The lyrics|I will|I have|As per)\b', s, flags=re.IGNORECASE)
+        ]
+        if len(valid_sentences) >= 2:
+            t = ' '.join(valid_sentences[:2])
+        elif valid_sentences:
+            t = valid_sentences[0]
+
+        # 残存する日本語のフォールバック置換
+        for jp_word, romaji in COMMON_ROMAJI_MAP.items():
+            if jp_word in t:
+                t = t.replace(jp_word, romaji)
+
     t = clean_syntax_garbage(t)
-    return t
+    return t.strip()
 
 
 def fix_ja_descriptions(db_path: str = DB_PATH, limit: int = None, dry_run: bool = False, auto_confirm: bool = False, base_url: str = LEMONADE_BASE_URL):
@@ -342,9 +412,6 @@ def fix_ja_descriptions(db_path: str = DB_PATH, limit: int = None, dry_run: bool
     print(f"  データベース: {db_path}")
     print(f"  LLM サーバー: {base_url}")
     print(f"==================================================\n")
-
-    active_model = get_lemonade_model(base_url)
-    print(f"[System] 使用モデル: {active_model}")
 
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -391,6 +458,9 @@ def fix_ja_descriptions(db_path: str = DB_PATH, limit: int = None, dry_run: bool
                 return True
         sample_targets = targets
 
+    active_model = get_lemonade_model(base_url)
+    print(f"[System] 使用モデル: {active_model}")
+
     success_count = 0
     start_time = time.time()
     system_role = (
@@ -409,6 +479,7 @@ def fix_ja_descriptions(db_path: str = DB_PATH, limit: int = None, dry_run: bool
 【厳格ルール】
 ・中国語の文字（簡体字等）や中国語構文（这首, 由…创作, 展现了, 融合了, 充满了 等）は完全排除し、綺麗な日本語のみを使うこと。
 ・4桁西暦（例: 1973年、1960年代）を正しく使うこと。
+・MarkdownコードブロックやJSON形式、"json"という単語は絶対に出力しないこと。
 ・前置きや解説ラベル、Markdownは出力せず、本文（1〜2文）のみを出力すること。
 
 曲名: {t['title']}
@@ -461,9 +532,6 @@ def fix_en_descriptions(db_path: str = DB_PATH, limit: int = None, dry_run: bool
     print(f"  LLM サーバー: {base_url}")
     print(f"==================================================\n")
 
-    active_model = get_lemonade_model(base_url)
-    print(f"[System] 使用モデル: {active_model}")
-
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     cur.execute("SELECT id, title, artist, album, release_year, description_ja, description_en FROM tracks;")
@@ -509,13 +577,27 @@ def fix_en_descriptions(db_path: str = DB_PATH, limit: int = None, dry_run: bool
                 return True
         sample_targets = targets
 
+    active_model = get_lemonade_model(base_url)
+    print(f"[System] 使用モデル: {active_model}")
+
     success_count = 0
     start_time = time.time()
     system_role = (
-        "You are an expert English music announcer. "
+        "You are an expert English music radio announcer. "
         "You output strictly 1-2 sentences of natural, engaging English description "
-        "using Latin/Romaji alphabet only, with NO notes, NO conversational filler, and NO markdown."
+        "using Latin/Romaji alphabet ONLY (ABSOLUTELY NO Japanese/Chinese characters like Kanji, Hiragana, Katakana). "
+        "CRITICAL: If the song title, artist, or album contains Japanese characters, you MUST transliterate them into Romaji or English "
+        '(e.g. "じれったい" -> "Jirettai", "やせっぽちの星" -> "Yaseppochi no Hoshi", "玉置浩二" -> "Koji Tamaki", "安全地帯" -> "Anzen Chitai"). '
+        "NO notes, NO conversational filler, and NO markdown."
     )
+
+    few_shot = [
+        {"role": "system", "content": system_role},
+        {"role": "user", "content": "Song: じれったい [Live]\nArtist: 安全地帯\nAlbum: ALL TIME BEST\nRelease Year: 2022\nJapanese Context: 2022年の日本武道館での安全地帯の「じれったい」は、熱いパフォーマンスが詰まった代表曲。"},
+        {"role": "assistant", "content": 'Recorded live at Nippon Budokan in 2022, Anzen Chitai\'s iconic classic "Jirettai" delivers an electrifying performance filled with emotional depth and rich harmonies. This unforgettable live rendition captures the legendary band at their absolute finest.'},
+        {"role": "user", "content": "Song: やせっぽちの星 [Live]\nArtist: 玉置浩二\nAlbum: '06 PRESENT TOUR LIVE\nRelease Year: 2006\nJapanese Context: 2006年のライブ音源『やせっぽちの星』は、玉置浩二の歌声とピアノの優しさが心に残るバラード。"},
+        {"role": "assistant", "content": 'From his 2006 live tour, Koji Tamaki\'s poignant ballad "Yaseppochi no Hoshi" blends tender piano melodies with soulful, heartwarming vocals to create a deeply comforting listening experience.'}
+    ]
 
     for idx, t in enumerate(sample_targets, 1):
         print(f"\n[{idx}/{len(sample_targets)}] EN修復中: ID {t['id']} [{t['artist']} - {t['title']}]")
@@ -524,27 +606,22 @@ def fix_en_descriptions(db_path: str = DB_PATH, limit: int = None, dry_run: bool
 
         prompt = f"""Please provide a 1-2 sentence natural English description for this song.
 
-【Rules】
-- Latin/Romaji characters only (NO Kanji, Hiragana, Katakana, or Chinese characters).
-- 4-digit years only (e.g. 1976, 1970s).
-- Output ONLY the 1-2 sentence description text without any labels, introductions, or markdown.
+【CRITICAL RULES】
+- Latin/Romaji characters ONLY (ABSOLUTELY NO Japanese/Chinese characters).
+- Transliterate all Japanese titles and artists into Romaji (e.g. 'じれったい' -> 'Jirettai', 'やせっぽちの星' -> 'Yaseppochi no Hoshi', '玉置浩二' -> 'Koji Tamaki', '安全地帯' -> 'Anzen Chitai').
+- 4-digit years only (e.g. 1988, 2006, 2022).
+- Output ONLY the 1-2 sentence description text.
 
-Title: {t['title']}
+Song: {t['title']}
 Artist: {t['artist']}
 Album: {t['album']}
 Release Year: {t['year']}
-Current Text: {t['clean_en']}
 Japanese Context: {t['ja']}"""
 
-        messages = [
-            {"role": "system", "content": system_role},
-            {"role": "user", "content": "Title: Hotel California\nArtist: Eagles\nAlbum: Hotel California\nRelease Year: 1976\nCurrent Text: Hotel California is 老鹰乐队's famous song.\nJapanese Context: 「ホテルカリフォルニア」はEaglesの名曲。"},
-            {"role": "assistant", "content": "Released in 1976, Eagles' iconic rock classic \"Hotel California\" features unforgettable twin-guitar harmonies and melancholic storytelling that continues to captivate listeners worldwide."},
-            {"role": "user", "content": prompt}
-        ]
+        messages = few_shot + [{"role": "user", "content": prompt}]
 
         try:
-            raw_new_en = call_llm(messages, active_model, base_url, max_tokens=120)
+            raw_new_en = call_llm(messages, active_model, base_url, max_tokens=150)
             clean_new_en = extract_clean_text(raw_new_en, is_ja=False)
 
             print(f"  [NEW EN] {clean_new_en}")
@@ -569,21 +646,32 @@ Japanese Context: {t['ja']}"""
 
 
 def run_all(db_path: str = DB_PATH, limit: int = None, dry_run: bool = False, auto_confirm: bool = False, base_url: str = LEMONADE_BASE_URL):
-    """構文クリーンアップ、日本語解説修復、英語解説修復を一括実行"""
+    """構文クリーンアップ、日本語解説修復、英語解説修復を一括で自動実行"""
     print(f"\n==================================================")
-    print(f"  全解説文 (JA / EN) の総合修復を一括実行")
+    print(f"  全解説文 (JA / EN) の総合修復を一括自動実行")
+    print(f"  データベース: {db_path}")
     print(f"==================================================")
 
-    # 1. 構文ゴミのクリーンアップ
-    clean_syntax_all(db_path=db_path, dry_run=dry_run, auto_confirm=auto_confirm)
+    if not auto_confirm and not dry_run:
+        print("\n全フェーズ (1. 構文クリーンアップ -> 2. 日本語解説修復 -> 3. 英語解説修復) を一括で自動実行します。")
+        ans = input("実行しますか？ (y/N): ").strip().lower()
+        if ans != 'y':
+            print("[Canceled] 一括修復処理をキャンセルしました。")
+            return
 
-    # 2. 日本語解説文の修復
-    fix_ja_descriptions(db_path=db_path, limit=limit, dry_run=dry_run, auto_confirm=auto_confirm, base_url=base_url)
+    # 全フェーズを自動継続モード (auto_confirm=True) で実行
+    print("\n>>> [Phase 1/3] 構文クリーンアップ開始")
+    clean_syntax_all(db_path=db_path, dry_run=dry_run, auto_confirm=True)
 
-    # 3. 英語解説文の修復
-    fix_en_descriptions(db_path=db_path, limit=limit, dry_run=dry_run, auto_confirm=auto_confirm, base_url=base_url)
+    print("\n>>> [Phase 2/3] 日本語解説文 (description_ja) 修復開始")
+    fix_ja_descriptions(db_path=db_path, limit=limit, dry_run=dry_run, auto_confirm=True, base_url=base_url)
 
-    print(f"\n[Complete] すべての解説文修復処理が完了しました。")
+    print("\n>>> [Phase 3/3] 英語解説文 (description_en) 修復開始")
+    fix_en_descriptions(db_path=db_path, limit=limit, dry_run=dry_run, auto_confirm=True, base_url=base_url)
+
+    print(f"\n==================================================")
+    print(f"[Complete] すべての解説文修復処理が完了しました。")
+    print(f"==================================================\n")
 
 
 if __name__ == "__main__":
@@ -595,7 +683,7 @@ if __name__ == "__main__":
     
     # 実行モード
     mode_group = parser.add_argument_group("実行モード")
-    mode_group.add_argument("--all", action="store_true", help="構文クリーンアップ、日本語解説修復、英語解説修復をすべて実行")
+    mode_group.add_argument("--all", action="store_true", help="構文クリーンアップ、日本語解説修復、英語解説修復をすべて自動実行")
     mode_group.add_argument("--clean-syntax-only", action="store_true", help="LLMを呼び出さず、構文ゴミ・引用符・年号のルールベースクリーンアップのみ実行")
     mode_group.add_argument("--ja", action="store_true", help="日本語解説文 (description_ja) の中国語・異常のみを修復")
     mode_group.add_argument("--en", action="store_true", help="英語解説文 (description_en) の日中文字混入・メタ発言のみを修復")
@@ -646,7 +734,8 @@ if __name__ == "__main__":
             print("4. すべて実行 (--all)")
             print("0. 終了")
             
-            choice = input("\n実行する番号を入力してください (1-4, 0): ").strip()
+            raw_choice = input("\n実行する番号を入力してください (1-4, 0): ").strip()
+            choice = unicodedata.normalize('NFKC', raw_choice)
             if choice == "1":
                 clean_syntax_all(db_path=args.db, dry_run=args.dry_run, auto_confirm=args.yes)
             elif choice == "2":
