@@ -314,8 +314,10 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 
 #### 1. 英語DJモード (`build_english_track_announcement`, `speak_english`)
 - **英語DJナレーション生成 (`build_english_track_announcement`)**:
-  - データベース（`music_meta.db`）の **`description_en`（英語解説文）を直接結合**して流暢な英語曲紹介文を生成。
-  - タイトル、アーティスト、および `description_en` を組み合わせたFMラジオDJスタイル（例: `Now playing: 'White Room' by Cream. 'White Room' is a psychedelic rock classic...` / 次曲: `Next up is '...' by ...` / スキップ: `Skipping to '...' by ...`）。
+  - データベース（`music_meta.db`）の **`title_en`（英語曲名・ローマ字）および `artist_en`（英語アーティスト名・ローマ字）を最優先活用**。
+  - `title_en` / `artist_en` が未登録、または日本語文字（漢字・ひらがな・カタカナ）が残存している場合は、**`pykakasi` によるヘボン式ローマ字変換（`to_roman_if_japanese`）を自動適用**（`pykakasi` 未インストール環境でも安全にフォールバック）。
+  - データベースの **`description_en`（英語解説文）を直接結合**して流暢な英語曲紹介文を生成。
+  - タイトル、アーティスト、および `description_en` を組み合わせたFMラジオDJスタイル（例: `Now playing: 'Sparkle' by Tatsuro Yamashita. 'Sparkle' is a signature city pop classic...` / 次曲: `Next up is '...' by ...` / スキップ: `Skipping to '...' by ...`）。
 - **英語音声合成 (`speak_english`)**:
   - **edge-tts (最優先)**: `en-US-ChristopherNeural` などの超高音質ニューラル音声で再生。
   - **Google TTS / espeak-ng / VOICEVOX (フォールバック)**。

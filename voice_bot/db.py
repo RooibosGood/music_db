@@ -38,7 +38,7 @@ def find_track_metadata(
 
             cur.execute(
                 """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE file_path LIKE ? OR relative_path LIKE ? OR relative_path = ? OR file_path LIKE ? OR relative_path LIKE ?
                 LIMIT 1;
@@ -54,7 +54,7 @@ def find_track_metadata(
         if title and artist and artist != "アーティスト未設定" and artist != "Unknown":
             cur.execute(
                 """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE (title LIKE ? OR ? LIKE '%' || title || '%') AND (artist LIKE ? OR ? LIKE '%' || artist || '%')
                 LIMIT 1;
@@ -70,7 +70,7 @@ def find_track_metadata(
         if title and title != "未選択" and title != "Unknown":
             cur.execute(
                 """
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE title LIKE ? OR ? LIKE '%' || title || '%'
                 ORDER BY CASE WHEN title = ? THEN 0 ELSE 1 END
@@ -168,7 +168,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
 
         # まず直近再生除外 ＋ description ありの候補をランダムに50件取得
         sql = f"""
-            SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+            SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
             FROM tracks
             {base_where}
             ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
@@ -184,7 +184,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         # ヒットしなかった場合、キーワードの部分一致でフォールバック
         if not candidate_rows and keyword_q:
             cur.execute(f"""
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?
                 ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
@@ -195,7 +195,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         # それでもヒットしない場合、解説文付きの曲からランダムに取得
         if not candidate_rows:
             cur.execute("""
-                SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
                 FROM tracks
                 WHERE (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '')
                 ORDER BY RANDOM()
@@ -205,7 +205,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
 
         # それでも無ければテーブル全体からランダム取得
         if not candidate_rows:
-            cur.execute("SELECT id, title, artist, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en FROM tracks ORDER BY RANDOM() LIMIT 50;")
+            cur.execute("SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en FROM tracks ORDER BY RANDOM() LIMIT 50;")
             candidate_rows = [dict(r) for r in cur.fetchall()]
 
         # Python 側でも再度シャッフルして完全なランダム性を確保

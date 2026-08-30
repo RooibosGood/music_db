@@ -75,6 +75,8 @@ def init_db(reset: bool = False):
             duration_seconds INTEGER,
             title TEXT,
             artist TEXT,
+            title_en TEXT,
+            artist_en TEXT,
             album TEXT,
             release_year INTEGER,
             music_category TEXT,
@@ -101,6 +103,10 @@ def init_db(reset: bool = False):
             cur.execute("ALTER TABLE tracks ADD COLUMN bit_depth INTEGER;")
         if "duration_seconds" not in columns:
             cur.execute("ALTER TABLE tracks ADD COLUMN duration_seconds INTEGER;")
+        if "title_en" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN title_en TEXT;")
+        if "artist_en" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN artist_en TEXT;")
         if "music_category" not in columns:
             cur.execute("ALTER TABLE tracks ADD COLUMN music_category TEXT;")
         if "description_ja" not in columns:
@@ -213,6 +219,8 @@ def parse_key_value(text: str) -> dict:
         "composer": None,
         "performers": None,
         "release_year": None,
+        "title_en": None,
+        "artist_en": None,
         "description_ja": None,
         "description_en": None
     }
@@ -231,6 +239,10 @@ def parse_key_value(text: str) -> dict:
                         if cat in str(v):
                             result["music_category"] = cat
                             break
+                elif any(d in k_upper for d in ("TITLEEN", "ENGLISHTITLE", "TITLEENGLISH", "ENGLISHTRACK")):
+                    result["title_en"] = str(v).strip()
+                elif any(d in k_upper for d in ("ARTISTEN", "ENGLISHARTIST", "ARTISTENGLISH")):
+                    result["artist_en"] = str(v).strip()
                 elif "GENRE" in k_upper:
                     matched = [g for g in ALLOWED_GENRES if g in str(v)]
                     result["genre"] = ", ".join(matched) if matched else str(v)
@@ -256,7 +268,7 @@ def parse_key_value(text: str) -> dict:
                     if not result.get("description_ja"):
                         result["description_ja"] = str(v).strip()
 
-            if result.get("description_ja") or result.get("description_en"):
+            if result.get("description_ja") or result.get("description_en") or result.get("title_en"):
                 return result
     except Exception:
         pass
@@ -289,6 +301,14 @@ def parse_key_value(text: str) -> dict:
                     if cat in v:
                         result["music_category"] = cat
                         break
+            elif any(term in k_upper for term in ("TITLEEN", "ENGLISHTITLE", "曲名英語", "英語曲名", "タイトル英語", "英語タイトル")):
+                current_key = "TITLE_EN"
+                if v and v.lower() not in ("null", "none", "unknown", "n/a"):
+                    result["title_en"] = v
+            elif any(term in k_upper for term in ("ARTISTEN", "ENGLISHARTIST", "アーティスト英語", "英語アーティスト", "歌手英語", "英語歌手")):
+                current_key = "ARTIST_EN"
+                if v and v.lower() not in ("null", "none", "unknown", "n/a"):
+                    result["artist_en"] = v
             elif "GENRE" in k_upper or "ジャンル" in k_upper:
                 current_key = "GENRE"
                 if v and v.lower() not in ("null", "none", "unknown", "n/a"):
@@ -368,7 +388,7 @@ def parse_key_value(text: str) -> dict:
         v = v.strip().strip('"').strip("'").strip()
         return v
 
-    for field in ("mood", "composer", "performers"):
+    for field in ("mood", "composer", "performers", "title_en", "artist_en"):
         if result.get(field):
             result[field] = clean_text_val(result[field])
 
@@ -395,6 +415,8 @@ Web Context:
 
 Output strictly a JSON object with these keys:
 - "category": "邦楽" (for Japanese artists/music) or "洋楽" (for Western/International music) or "その他"
+- "title_en": Official English title, or natural Hepburn romanization (e.g. "Sparkle", "Umi no Mieru Machi")
+- "artist_en": Official English artist name, or natural Hepburn romanization (e.g. "Tatsuro Yamashita", "Hikaru Utada")
 - "genre": One or more matching genres from [{genres_options}]
 - "mood": Comma-separated mood keywords (e.g. Upbeat, Energetic, Calm, Melancholic)
 - "energy_level": Integer from 1 (quiet) to 5 (very energetic)
@@ -409,7 +431,7 @@ Output strictly a JSON object with these keys:
         messages=[
             {
                 "role": "system",
-                "content": "You are a music metadata analysis assistant. You always output valid JSON with both Japanese and English descriptions."
+                "content": "You are a music metadata analysis assistant. You always output valid JSON with English title/artist and both Japanese and English descriptions."
             },
             {"role": "user", "content": prompt}
         ],
@@ -486,18 +508,20 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
             
             try:
                 meta = enrich_metadata_with_llm(tags, web_context)
+                title_en_val = meta.get('title_en') or tags.get('title')
+                artist_en_val = meta.get('artist_en') or tags.get('artist')
                 desc_ja_prev = (meta.get('description_ja')[:20] + '...') if meta.get('description_ja') else 'なし'
                 desc_en_prev = (meta.get('description_en')[:20] + '...') if meta.get('description_en') else 'なし'
-                print(f"  抽出結果: 区分={meta.get('music_category')} | ジャンル={meta.get('genre')} | 気分={meta.get('mood')} | エネルギー={meta.get('energy_level')} | 解説(日)={desc_ja_prev} | 解説(英)={desc_en_prev}")
+                print(f"  抽出結果: 英語名={title_en_val} / {artist_en_val} | 区分={meta.get('music_category')} | ジャンル={meta.get('genre')} | 気分={meta.get('mood')} | エネルギー={meta.get('energy_level')} | 解説(日)={desc_ja_prev} | 解説(英)={desc_en_prev}")
                 
                 cur.execute("""
                 INSERT INTO tracks (
                     file_path, relative_path, file_format, is_hires, sample_rate, bit_depth, duration_seconds,
-                    title, artist, album,
+                    title, artist, title_en, artist_en, album,
                     release_year, music_category, genre, mood, energy_level, composer, performers,
                     description_ja, description_en
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     full_path,
                     rel_path,
@@ -508,6 +532,8 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                     tags["duration_seconds"],
                     tags["title"],
                     tags["artist"],
+                    meta.get("title_en"),
+                    meta.get("artist_en"),
                     tags["album"],
                     meta.get("release_year") or (int(tags["year"]) if tags["year"].isdigit() else None),
                     meta.get("music_category"),

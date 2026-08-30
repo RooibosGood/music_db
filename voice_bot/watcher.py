@@ -197,6 +197,8 @@ def run_track_watcher_loop():
                 song["description"] = description
                 song["description_ja"] = description_ja
                 song["description_en"] = description_en
+                song["title_en"] = db_meta.get("title_en", song.get("title_en", ""))
+                song["artist_en"] = db_meta.get("artist_en", song.get("artist_en", ""))
                 song["genre"] = db_meta.get("genre", song.get("genre", ""))
                 song["mood"] = db_meta.get("mood", song.get("mood", ""))
 

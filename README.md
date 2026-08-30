@@ -212,6 +212,8 @@ python cleanup_long_tracks.py --all -y
 | `duration_seconds` | `INTEGER` | 再生時間（秒）※ 20分（1200秒）以上は登録除外 |
 | `title` | `TEXT` | 楽曲タイトル |
 | `artist` | `TEXT` | アーティスト名 |
+| `title_en` | `TEXT` | **英語曲名・ローマ字表記（英語DJアナウンス用）** |
+| `artist_en` | `TEXT` | **英語アーティスト名・ローマ字表記（英語DJアナウンス用）** |
 | `album` | `TEXT` | アルバム名 |
 | `release_year` | `INTEGER` | リリース年 |
 | `music_category` | `TEXT` | 楽曲区分 (`邦楽`, `洋楽`, `その他`) |
@@ -229,21 +231,21 @@ python cleanup_long_tracks.py --all -y
 ## moOde 音声 & Web Chat AI システム (`voice_bot/`)
 
 Jetson Orin Nano Super 上で動作し、**マイクによる音声入力** と **Webブラウザ（スマホ・PC）からのチャット入力** の双方から Raspberry Pi 5 上の moOde audio (MPD) をシームレスに操作・音楽再生できるAIアシスタントです。  
-> 📖 **詳細なシステム仕様・API・プロトコル定義**: [VOICE_BOT_SPEC.md](VOICE_BOT_SPEC.md) をご覧ください。
+> 📖 **詳細なシステム仕様・API・プロトコル定義**: [VOICE_BOT_SPEC.md](doc/VOICE_BOT_SPEC.md) をご覧ください。
 
 ### 🌟 特徴
 - **ハイブリッド操作**: マイクに向かって「ヘイ、マスター、Jazzをかけて」と話しかけても、ブラウザのチャット欄に入力しても即座に反応
 - **リアルタイム双方向同期**: 音声認識された内容・AIの返答・再生中の曲名が WebSocket 経由でブラウザ画面にリアルタイム表示
 - **グラスモフィズム Web UI**: アナログレコードアニメーション、オーディオビジュアライザー、再生/一時停止/スキップ/音量調整、ハイレゾバッジ表示
 - **Webからの電源制御 (シャットダウン / 再起動)**: Web画面の「⚡ 電源」ボタンから Jetson Orin Nano Super 本体の再起動やシャットダウンを安全に実行可能
-- **SQLite DB 連携 & FMラジオDJ曲紹介**: `music_meta.db` のリッチなメタデータ（ムード、エネルギー、ハイレゾ、ジャンル、`description_en` / `description_ja`）を活用した選曲とアナウンス
-- **英語DJモード & 日本語モード**: コマンドライン引数（`--en` / `--ja`）で英語FMラジオDJ風の曲紹介（`description_en` 読み上げ）と日本語モードを自在に切り替え可能
+- **SQLite DB 連携 & FMラジオDJ曲紹介**: `music_meta.db` のリッチなメタデータ（ムード、エネルギー、ハイレゾ、ジャンル、`description_en` / `description_ja`、`title_en` / `artist_en`）を活用した選曲とアナウンス
+- **英語DJモード & 日本語モード**: コマンドライン引数（`--en` / `--ja`）で英語FMラジオDJ風の曲紹介（`title_en` / `artist_en` / `description_en` 読み上げ）と日本語モードを自在に切り替え可能
 
 ### 📦 必要パッケージのインストール & 電源制御の権限設定 (Jetson初回設定)
 
 ```bash
 # 1. Python パッケージのインストール
-pip install fastapi uvicorn websockets python-mpd2 faster-whisper pyaudio pydantic edge-tts
+pip install fastapi uvicorn websockets python-mpd2 faster-whisper pyaudio pydantic edge-tts pykakasi
 
 # 2. Web UI からのシャットダウン/再起動を許可する権限設定 (Jetson上で1度だけ実行)
 bash setup_sudo_power.sh

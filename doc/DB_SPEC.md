@@ -35,6 +35,8 @@
 | `duration_seconds` | `INTEGER` | YES | `NULL` | - | 再生時間（秒数）。※20分（1200秒）以上の音源は除外 |
 | `title` | `TEXT` | YES | `NULL` | - | 楽曲タイトル |
 | `artist` | `TEXT` | YES | `Unknown` | - | アーティスト名 / 演奏グループ名 |
+| `title_en` | `TEXT` | YES | `NULL` | - | **英語曲名・ローマ字表記（英語DJアナウンス用）** |
+| `artist_en` | `TEXT` | YES | `NULL` | - | **英語アーティスト名・ローマ字表記（英語DJアナウンス用）** |
 | `album` | `TEXT` | YES | `NULL` | - | アルバム名 |
 | `release_year` | `INTEGER` | YES | `NULL` | - | リリース年（西暦4桁、例: `1982`, `2023`） |
 | `music_category` | `TEXT` | YES | `その他` | - | 楽曲区分（`邦楽` / `洋楽` / `その他`） |
@@ -88,6 +90,12 @@
 Web検索結果および音源タグ情報を元に、ローカルLLMが生成した解説文（1〜2文）です。楽曲の背景、代表曲としての位置づけ、特徴などが記述されており、検索UIでの表示やAIによる楽曲紹介、英語DJモード、RAG（Retrieval-Augmented Generation）に活用できます。
 - **`description_ja`**: 日本語による解説文（1〜2文）
 - **`description_en`**: 英語による解説文（1〜2文、FMラジオDJアナウンス等に直接利用可能）
+
+### 3.6 `title_en` / `artist_en`（英語曲名・英語アーティスト名）
+英語DJアナウンス（`voice_bot.py` の英語DJモード）において、日本語の楽曲名やアーティスト名を自然な英語・ヘボン式ローマ字で読み上げるために利用されます。
+- **`title_en`**: 公式英題（例: `Sparkle`）または自然なヘボン式ローマ字表記（例: `Umi no Mieru Machi`）。
+- **`artist_en`**: 公式英語アーティスト名（例: `Joe Hisaishi`）または自然なヘボン式ローマ字表記（例: `Tatsuro Yamashita`）。
+- 未登録時や日本語文字が残存している場合は、スクリプト側で `pykakasi` によるローマ字変換フォールバックが適用されます。
 
 ---
 

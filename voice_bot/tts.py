@@ -27,6 +27,15 @@ try:
 except ImportError:
     edge_tts = None
 
+# 日本語文字（ひらがな、カタカナ、漢字、長音符等）判定用正規表現
+RE_JAPANESE = re.compile(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u30FC]')
+
+try:
+    import pykakasi
+    _kakasi = pykakasi.kakasi()
+except ImportError:
+    _kakasi = None
+
 # 設定値は config モジュールを直接参照する
 from . import config
 
@@ -512,25 +521,71 @@ def clean_english_text_for_speech(text: str, max_chars: int = 250) -> str:
     return " ".join(result) if result else t[:max_chars]
 
 
+def to_roman_if_japanese(text: str) -> str:
+    """日本語文字（漢字・ひらがな・カタカナ）が含まれている場合、pykakasiを用いてヘボン式ローマ字に変換する"""
+    if not text:
+        return ""
+    text_str = str(text).strip()
+    if not RE_JAPANESE.search(text_str):
+        return text_str
+
+    if _kakasi is None:
+        return text_str
+
+    try:
+        result = _kakasi.convert(text_str)
+        words = []
+        for item in result:
+            hep = item.get("hepburn", "").strip()
+            if hep:
+                words.append(hep.capitalize())
+            else:
+                orig = item.get("orig", "").strip()
+                if orig:
+                    words.append(orig)
+        roman_text = " ".join(words).strip()
+        roman_text = re.sub(r"\s+", " ", roman_text)
+        return roman_text if roman_text else text_str
+    except Exception as e:
+        print(f"⚠️ [tts] pykakasi ローマ字変換エラー: {e}", flush=True)
+        return text_str
+
+
 def build_english_track_announcement(
     track_info: dict,
     is_next: bool = False,
     is_skip: bool = False,
 ) -> str:
-    """曲情報からスマートで自然な英語FMラジオDJ曲紹介文を生成（description_en を最優先活用）"""
+    """曲情報からスマートで自然な英語FMラジオDJ曲紹介文を生成（title_en / artist_en / description_en を最優先活用）"""
     if not track_info:
         return "Now playing the next track. Enjoy the music." if is_next else "Now playing music."
 
-    title = (track_info.get("title") or "Unknown Track").strip()
-    artist = (track_info.get("artist") or "").strip()
+    raw_title = (track_info.get("title") or "Unknown Track").strip()
+    raw_artist = (track_info.get("artist") or "").strip()
+    title_en = (track_info.get("title_en") or "").strip()
+    artist_en = (track_info.get("artist_en") or "").strip()
     genre = (track_info.get("genre") or "").strip()
     mood = (track_info.get("mood") or "").strip()
     desc_en = (track_info.get("description_en") or "").strip()
     desc_ja = (track_info.get("description_ja") or track_info.get("description") or "").strip()
 
     # 日本語/未設定表記のクリーンアップ
-    if artist in ("アーティスト未設定", "Unknown", "unknown", "None", ""):
-        artist = ""
+    if raw_artist in ("アーティスト未設定", "Unknown", "unknown", "None", "none", "null", ""):
+        raw_artist = ""
+    if artist_en in ("アーティスト未設定", "Unknown", "unknown", "None", "none", "null", ""):
+        artist_en = ""
+
+    # タイトル決定: title_en が存在し日本語が含まれていない場合は最優先、そうでなければ to_roman_if_japanese でローマ字変換
+    if title_en and not RE_JAPANESE.search(title_en):
+        title = title_en
+    else:
+        title = to_roman_if_japanese(title_en or raw_title)
+
+    # アーティスト名決定: artist_en が存在し日本語が含まれていない場合は最優先、そうでなければ to_roman_if_japanese でローマ字変換
+    if artist_en and not RE_JAPANESE.search(artist_en):
+        artist = artist_en
+    else:
+        artist = to_roman_if_japanese(artist_en or raw_artist)
 
     # 英語ジャンル名への変換
     en_genre = genre
@@ -580,7 +635,6 @@ def build_english_track_announcement(
                 return dj_line
         except Exception as e:
             print(f"⚠️ [tts] llama.cpp 英語DJ紹介文生成スキップ/フォールバック: {e}", flush=True)
-
 
     # 3. テンプレートによる補完
     extra = ""

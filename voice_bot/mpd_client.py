@@ -84,11 +84,15 @@ def get_moode_status() -> Dict[str, Any]:
         db_meta = find_track_metadata(file_path=song_file, title=song_title, artist=song_artist)
         description_ja = db_meta.get("description_ja", "") if db_meta else ""
         description_en = db_meta.get("description_en", "") if db_meta else ""
+        title_en = db_meta.get("title_en", "") if db_meta else ""
+        artist_en = db_meta.get("artist_en", "") if db_meta else ""
         description = (description_en if config.ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
         song_info = {
             "title": song_title,
             "artist": song_artist,
+            "title_en": title_en,
+            "artist_en": artist_en,
             "album": song_album,
             "file": song_file,
             "id": song.get("id", ""),
@@ -170,6 +174,8 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 first_track = added_tracks[0] if added_tracks else db_tracks[0]
                 first_title = first_track.get("title", "未設定")
                 first_artist = first_track.get("artist", "アーティスト未設定")
+                first_title_en = first_track.get("title_en", "")
+                first_artist_en = first_track.get("artist_en", "")
                 first_file = first_track.get("relative_path", "")
                 description_ja = first_track.get("description_ja", "")
                 description_en = first_track.get("description_en", "")
@@ -189,6 +195,8 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 result["track_info"] = {
                     "title": first_title,
                     "artist": first_artist,
+                    "title_en": first_title_en,
+                    "artist_en": first_artist_en,
                     "file": last_announced_file,
                     "description_ja": description_ja,
                     "description_en": description_en,
@@ -259,11 +267,15 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             db_meta = find_track_metadata(file_path=new_file, title=new_title, artist=new_artist)
             description_ja = db_meta.get("description_ja", "") if db_meta else ""
             description_en = db_meta.get("description_en", "") if db_meta else ""
+            title_en = db_meta.get("title_en", "") if db_meta else ""
+            artist_en = db_meta.get("artist_en", "") if db_meta else ""
             description = (description_en if config.ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
             result["track_info"] = {
                 "title": new_title,
                 "artist": new_artist,
+                "title_en": title_en,
+                "artist_en": artist_en,
                 "file": new_file,
                 "description_ja": description_ja,
                 "description_en": description_en,
