@@ -95,10 +95,12 @@ def get_active_model_name(base_url: str = LEMONADE_BASE_URL) -> str:
     return "default"
 
 def clean_name_str(val: str) -> str:
-    """名前文字列のクレンジング（引用符、構文ゴミ、末尾記号等の除去）"""
+    """名前文字列のクレンジング（改行除去、引用符、構文ゴミ、末尾記号等の除去）"""
     if not val:
         return ""
     v = str(val).strip()
+    # 改行やタブを空白化
+    v = re.sub(r'[\r\n\t]+', ' ', v)
     v = re.sub(r'[\s\}、,`]+$', '', v)
     v = re.sub(r'^[\s`"]+', '', v)
     v = v.strip().strip('"').strip("'").strip()
@@ -193,11 +195,11 @@ def populate_english_names(
     limit: int = None,
     force_all: bool = False,
     dry_run: bool = False,
-    batch_size: int = 50
+    batch_size: int = 1
 ):
     """tracks テーブルの title_en, artist_en を一括生成・更新"""
     if not os.path.exists(db_path):
-        print(f"❌ [Error] データベースが見つかりません: {db_path}")
+        print(f"❌ [Error] データベースが見つかりません: {db_path}", flush=True)
         return
 
     conn = sqlite3.connect(db_path)
@@ -208,21 +210,22 @@ def populate_english_names(
     cur.execute("PRAGMA table_info(tracks);")
     columns = [col[1] for col in cur.fetchall()]
     if "title_en" not in columns or "artist_en" not in columns:
-        print("[System] tracks テーブルに title_en / artist_en カラムを追加します。")
+        print("[System] tracks テーブルに title_en / artist_en カラムを追加します。", flush=True)
         if "title_en" not in columns:
             cur.execute("ALTER TABLE tracks ADD COLUMN title_en TEXT;")
         if "artist_en" not in columns:
             cur.execute("ALTER TABLE tracks ADD COLUMN artist_en TEXT;")
         conn.commit()
 
-    # 対象レコードの抽出
+    # 対象レコードの抽出（未設定または空文字のレコード）
     if force_all:
         query_sql = "SELECT id, title, artist, album, description_ja, description_en, title_en, artist_en FROM tracks ORDER BY id ASC"
     else:
         query_sql = """
         SELECT id, title, artist, album, description_ja, description_en, title_en, artist_en
         FROM tracks
-        WHERE title_en IS NULL OR title_en = '' OR artist_en IS NULL OR artist_en = ''
+        WHERE (title_en IS NULL OR title_en = '')
+           OR (artist IS NOT NULL AND artist != '' AND artist NOT IN ('Unknown', 'unknown', 'アーティスト未設定') AND (artist_en IS NULL OR artist_en = ''))
         ORDER BY id ASC
         """
 
@@ -236,6 +239,7 @@ def populate_english_names(
     print(f"=== 英語名・ローマ字一括追加処理 ({'全件対象' if force_all else '未設定対象'}) ===", flush=True)
     print(f"  対象データベース: {db_path}", flush=True)
     print(f"  動作モード: {mode}", flush=True)
+    print(f"  コミット間隔: 1件ごと即時コミット" if batch_size == 1 else f"  コミット間隔: {batch_size}件ごと", flush=True)
     print(f"  ドライラン: {'有効 (DB書き込みなし)' if dry_run else '無効 (DBに保存)'}", flush=True)
     print(f"  対象曲数: {total_targets} 件\n", flush=True)
 
@@ -284,7 +288,7 @@ def populate_english_names(
             # 1. タイトル・アーティスト共にラテン文字（英語等）のみの場合 -> 即時パススルー
             if not title_has_ja and not artist_has_ja:
                 title_en_res = raw_title
-                artist_en_res = clean_artist
+                artist_en_res = clean_artist or raw_artist or "Unknown"
                 method = "Pass-Through (Latin/English)"
                 count_passthrough += 1
             else:
@@ -307,20 +311,20 @@ def populate_english_names(
                     if a_llm and not has_japanese(a_llm):
                         artist_en_res = a_llm
                     else:
-                        artist_en_res = convert_to_roman(clean_artist)
+                        artist_en_res = convert_to_roman(clean_artist) if clean_artist else (raw_artist or "Unknown")
 
                     method = "LLM (with kakasi fallback)"
                     count_llm += 1
                 else:
                     # 3. pykakasi による高速ローマ字化
                     title_en_res = convert_to_roman(raw_title)
-                    artist_en_res = convert_to_roman(clean_artist)
+                    artist_en_res = convert_to_roman(clean_artist) if clean_artist else (raw_artist or "Unknown")
                     method = "pykakasi (Romanization)"
                     count_kakasi += 1
 
             # 結果クレンジング
             title_en_res = clean_name_str(title_en_res) or raw_title
-            artist_en_res = clean_name_str(artist_en_res) or clean_artist
+            artist_en_res = clean_name_str(artist_en_res) or clean_artist or raw_artist or "Unknown"
 
             # ログ表示
             if idx <= 10 or idx % 50 == 0 or method != "Pass-Through (Latin/English)" or idx == total_targets:
@@ -332,7 +336,7 @@ def populate_english_names(
                     (title_en_res, artist_en_res, track_id)
                 )
                 updated_count += 1
-                if updated_count % batch_size == 0:
+                if batch_size == 1 or updated_count % batch_size == 0:
                     conn.commit()
 
         if not dry_run:
@@ -363,7 +367,7 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=None, help="処理する曲数の上限 (テスト用)")
     parser.add_argument("--all", "--force", action="store_true", dest="force_all", help="設定済みの曲も含めて全曲上書き再生成")
     parser.add_argument("--dry-run", action="store_true", help="DB書き込みを行わず結果プレビューのみ表示")
-    parser.add_argument("--batch-size", type=int, default=50, help="DBコミット間隔 (デフォルト: 50)")
+    parser.add_argument("--batch-size", type=int, default=1, help="DBコミット間隔 (デフォルト: 1件ごと即時コミット)")
     parser.add_argument("--db-path", type=str, default=DB_PATH, help="対象データベースファイルのパス")
     args = parser.parse_args()
 
@@ -375,3 +379,4 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         batch_size=args.batch_size
     )
+
