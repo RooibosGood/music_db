@@ -10,3 +10,5 @@ music_meta.db*
 *.mp3
 .env
 .DS_Store
+scratch/
+

@@ -4,6 +4,8 @@ NASなどのストレージに保存された楽曲ファイル（MP3 / FLAC）�
 
 > 📖 **関連仕様書ドキュメント**:
 > - データベース設計・SQL活用例: [doc/DB_SPEC.md](doc/DB_SPEC.md)
+> - NAS音楽ジャンル洗い出し仕様書: [doc/SCAN_GENRES_SPEC.md](doc/SCAN_GENRES_SPEC.md)
+> - 楽曲解説文修復ツール仕様書: [doc/FIX_DESCRIPTIONS_SPEC.md](doc/FIX_DESCRIPTIONS_SPEC.md)
 > - 音声＆Web AIアシスタント仕様書: [doc/VOICE_BOT_SPEC.md](doc/VOICE_BOT_SPEC.md)
 
 ---
@@ -104,6 +106,32 @@ python build_music_db.py --flac-only --limit 0
 
 # FLAC音源のみでDBを初期化して再構築
 python build_music_db.py --flac-only --limit 0 --reset
+```
+
+---
+
+## NAS音源ジャンル洗い出し・集計ツール (`scan_genres.py`)
+
+NAS（`\\homenas\music`）やローカルフォルダ内の音源ファイル（MP3, FLAC, WMA, M4A, OGG, WAV 等）からメタデータ（ジャンルタグ）を高速にスキャン・抽出し、ジャンル別の楽曲数・割合・代表曲の集計やレポート生成を行うツールです。
+
+```bash
+# 1. NAS全体をスキャンしてターミナルにジャンルランキングを表示
+python scan_genres.py
+
+# 2. テスト実行（最初の100曲のみスキャン）
+python scan_genres.py --limit 100
+
+# 3. MarkdownレポートおよびCSVファイルを自動生成
+python scan_genres.py --md genre_report.md --csv genre_summary.csv
+
+# 4. FLAC音源のみを対象に集計し、既存DB (music_meta.db) と対比
+python scan_genres.py --flac-only --compare-db
+
+# 5. ジャンル未設定（タグなし）の音源ファイルを一覧出力
+python scan_genres.py --export-untagged untagged_tracks.txt
+
+# 6. 詳細なトラック情報と集計結果をJSON出力
+python scan_genres.py --json genre_details.json
 ```
 
 ---
