@@ -37,18 +37,24 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
     print(f"🤖 [LLM] 解析要求: '{user_text}'", flush=True)
     broadcast_process_status("llm", f"🤖 AIが選曲・意図を解釈中 ({config.LLM_MODEL}): 「{user_text}」")
 
-    system_prompt = """あなたは音楽再生AIアシスタントです。ユーザーの要望を解釈し、moOde audioの操作コマンドと自然な日本語の返答を生成してください。
+    system_prompt = """あなたは音楽再生AIアシスタントです。ユーザーの要望（日本語・英語）を解釈し、moOde audioの操作コマンドと自然な返答を生成してください。
 出力は必ず、説明文やMarkdownを含まない1つのJSONオブジェクトだけにしてください。
 
 【出力形式】
-{"action":"play_search"|"pause"|"stop"|"next"|"previous"|"unknown","query":"検索語","reply":"日本語返答"}
+{"action":"play_search"|"play"|"pause"|"stop"|"next"|"previous"|"unknown","query":"検索語","reply":"返答"}
 
 【ルール】
-- 「〜をかけて」「〜を流して」「Jazz」「静かな曲」「ハイレゾ」 ➔ action: "play_search", query: "検索語(ジャズ/ロック/アーティスト名/Ambientなど)", reply: "〜を再生します。"
-- 「止めて」「一時停止」「ストップ」 ➔ action: "pause", query: "", reply: "音楽を一時停止します。"
-- 「次の曲」「スキップ」 ➔ action: "next", query: "", reply: "次の曲を再生します。"
-- 「前の曲」「戻って」 ➔ action: "previous", query: "", reply: "前の曲に戻ります。"
-- 雑談や一般的な質問 ➔ action: "unknown", query: "", reply: "内容に応じた親切で自然な日本語返答"
+- 曲やジャンル、アーティストの指定・再生要求 ➔ action: "play_search", query: "検索対象(例: ジャズ, ロック, Diana Krall, ビートルズ, ハイレゾ, 静かな曲, Ambientなど)", reply: "〜を再生します。/ Playing jazz now."
+  例:
+  - "play jazz" / "jazz" / "ジャズかけて" ➔ {"action":"play_search","query":"ジャズ","reply":"ジャズを再生します。"}
+  - "play Beatles" / "ビートルズ流して" ➔ {"action":"play_search","query":"Beatles","reply":"ビートルズを再生します。"}
+  - "play something calm" / "静かな曲" ➔ {"action":"play_search","query":"静か","reply":"落ち着いた曲を再生します。"}
+  - "play music" / "何か音楽かけて" ➔ {"action":"play_search","query":"","reply":"おすすめの音楽を再生します。"}
+- 単なる再生再開（曲指定なしの「再生」「再開」「play」） ➔ action: "play", query: "", reply: "音楽の再生を再開します。"
+- 「止めて」「一時停止」「ストップ」「pause」「stop」 ➔ action: "pause", query: "", reply: "音楽を一時停止します。"
+- 「次の曲」「スキップ」「next」「skip」 ➔ action: "next", query: "", reply: "次の曲を再生します。"
+- 「前の曲」「戻って」「previous」「prev」「back」 ➔ action: "previous", query: "", reply: "前の曲に戻ります。"
+- 雑談や一般的な質問 ➔ action: "unknown", query: "", reply: "内容に応じた親切で自然な返答"
 """
 
     payload = {
@@ -92,6 +98,15 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
             try:
                 command, _ = decoder.raw_decode(cleaned_text[start:])
                 if isinstance(command, dict):
+                    # 正規化・補正: "play" で query が入っている場合は "play_search" に補正
+                    act = command.get("action", "unknown")
+                    q = str(command.get("query", "")).strip()
+                    if act == "play" and q:
+                        command["action"] = "play_search"
+                    elif act == "play_search":
+                        # query から余計な "play" プレフィックスを除去
+                        cleaned_q = re.sub(r"^(?:play\s+(?:some\s+|me\s+)?|put\s+on\s+|listen\s+to\s+)", "", q, flags=re.IGNORECASE).strip()
+                        command["query"] = cleaned_q or q
                     return command
             except json.JSONDecodeError:
                 continue
@@ -99,24 +114,43 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
     except Exception as e:
         print(f"⚠️ [LLM] llama.cpp接続エラー/フォールバック: {e}")
 
-    # フォールバック（キーワードベースの簡易判定）
-    if any(k in user_text for k in ["止め", "ストップ", "停止"]):
+    # フォールバック（キーワードベースの日英両対応判定）
+    lower_text = user_text.lower().strip()
+
+    # 1. 停止・一時停止
+    if any(k in lower_text for k in ["止め", "ストップ", "停止", "stop", "pause", "halt", "quiet", "shut up"]):
         return {"action": "pause", "query": "", "reply": "音楽を停止します。"}
-    elif any(k in user_text for k in ["次", "スキップ"]):
+
+    # 2. スキップ・次の曲
+    if any(k in lower_text for k in ["次", "スキップ", "next", "skip"]):
         return {"action": "next", "query": "", "reply": "次の曲を再生します。"}
-    elif any(k in user_text for k in ["前", "戻っ"]):
+
+    # 3. 前の曲・戻る
+    if any(k in lower_text for k in ["前", "戻っ", "previous", "prev", "back"]):
         return {"action": "previous", "query": "", "reply": "前の曲に戻ります。"}
-    elif any(k in user_text for k in ["かけて", "流して", "再生", "聴きたい", "ジャズ", "jazz", "ロック", "クラシック", "ポップ"]):
-        query = (
-            user_text.replace("をかけて", "")
-            .replace("を流して", "")
-            .replace("を再生して", "")
-            .replace("かけて", "")
-            .replace("流して", "")
-            .replace("再生して", "")
-            .strip()
-        )
-        return {"action": "play_search", "query": query or user_text, "reply": f"{query or user_text} を再生します。"}
+
+    # 4. 単なる再生再開（play / 再生 / スタート）
+    if lower_text in ["play", "resume", "start", "再生", "再開", "スタート"]:
+        return {"action": "play", "query": "", "reply": "音楽の再生を再開します。"}
+
+    # 5. 選曲・再生リクエスト（日英対応）
+    play_triggers = [
+        "かけて", "流して", "再生", "聴きたい", "聴かせて", "play", "put on", "listen to",
+        "ジャズ", "jazz", "ロック", "rock", "クラシック", "classic", "ポップ", "pop",
+        "ブルース", "blues", "ハイレゾ", "hires", "hi-res", "静か", "落ち着", "calm"
+    ]
+    if any(k in lower_text for k in play_triggers):
+        query = user_text
+        # 日本語助詞の除去
+        for sw in ["をかけて", "を流して", "を再生して", "かけて", "流して", "再生して", "聴かせて", "聴きたい"]:
+            query = query.replace(sw, "")
+        # 英語プレフィックス・サフィックスの除去
+        query = re.sub(r"^(?:play\s+(?:some\s+|me\s+)?|put\s+on\s+|listen\s+to\s+)", "", query, flags=re.IGNORECASE)
+        query = re.sub(r"\s+(?:please|music|song|songs)$", "", query, flags=re.IGNORECASE)
+        query = query.strip()
+
+        display_q = query or "おすすめの曲"
+        return {"action": "play_search", "query": query, "reply": f"{display_q} を再生します。"}
 
     return {
         "action": "unknown",
@@ -174,16 +208,20 @@ def process_user_message(
 
     if speak_voice:
         def speak_and_play_flow():
-            if config.ANNOUNCE_LANGUAGE == "en" and cmd.get("action") in ("play_search", "next", "previous"):
-                broadcast_process_status("tts", "🎙️ DJ英語曲紹介音声を生成・再生中 (edge-tts)...")
-                tts.speak_english(reply_text)
-            else:
-                broadcast_process_status("tts", "🎙️ 曲紹介音声を合成・再生中 (VOICEVOX)...")
-                tts.speak(reply_text)
-            if needs_playback:
-                trigger_playback_start()
-            else:
-                broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
+            try:
+                if config.ANNOUNCE_LANGUAGE == "en" and cmd.get("action") in ("play_search", "next", "previous"):
+                    broadcast_process_status("tts", "🎙️ DJ英語曲紹介音声を生成・再生中 (edge-tts)...")
+                    tts.speak_english(reply_text)
+                else:
+                    broadcast_process_status("tts", "🎙️ 曲紹介音声を合成・再生中 (VOICEVOX)...")
+                    tts.speak(reply_text)
+            except Exception as tts_err:
+                print(f"⚠️ [TTS] 発話処理エラー (再生は継続): {tts_err}")
+            finally:
+                if needs_playback:
+                    trigger_playback_start()
+                else:
+                    broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
 
         threading.Thread(target=speak_and_play_flow, daemon=True).start()
     else:

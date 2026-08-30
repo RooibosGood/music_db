@@ -124,6 +124,11 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
     """music_meta.db から選曲し、MPD 経由で moOde audio を操作"""
     action = command.get("action")
     query = command.get("query", "").strip()
+
+    # "play" で query が指定されている場合は自動的に "play_search"（選曲再生）として扱う
+    if action == "play" and query:
+        action = "play_search"
+
     result = {
         "success": False,
         "action": action,
@@ -152,7 +157,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             client.clear()
 
             print(f"🔍 [music_meta.db] 楽曲検索中: query='{query}'", flush=True)
-            _broadcast("db", f"🔍 楽曲データベースを検索中 (SQLite): 「{query}」")
+            _broadcast("db", f"🔍 楽曲データベースを検索中 (SQLite): 「{query or 'おすすめ'}」")
             db_tracks = search_tracks_from_db(query, limit=15)
             print(f"📊 [music_meta.db] 該当曲数: {len(db_tracks)} 件", flush=True)
 
@@ -193,7 +198,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 result["description_en"] = description_en
                 result["success"] = True
                 result["needs_playback"] = True
-                result["message"] = f"「{query}」に該当する楽曲 ({len(db_tracks)}曲) をセットしました。"
+                result["message"] = f"「{query or 'おすすめ'}」に該当する楽曲 ({added_count or len(db_tracks)}曲) をセットしました。"
 
                 print(f"🎵 [moOde] '{query}' の楽曲をセットしました ({added_count}曲 キュー追加, 先頭={last_announced_file})", flush=True)
                 if description_ja or description_en:
@@ -205,6 +210,15 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 print(f"⚠️ [music_meta.db] '{query}' に該当する曲が見つかりません", flush=True)
 
         elif action == "play":
+            status = client.status()
+            pl_len = int(status.get("playlistlength", 0))
+            if pl_len == 0:
+                # キューが空の場合は自動で選曲して再生
+                print("🎵 [moOde] キューが空のため、ランダム選曲を実行します...", flush=True)
+                client.close()
+                client.disconnect()
+                return control_moode({"action": "play_search", "query": ""})
+
             _broadcast("moode", "▶️ moOde 音楽再生を再開中...", auto_idle_sec=3.0)
             client.play()
             result["success"] = True
