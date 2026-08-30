@@ -158,7 +158,21 @@ python fix_descriptions.py --en -y
 python fix_descriptions.py --all -y
 ```
 
-### 2. 長尺音源・年号クリーンアップ (`cleanup_long_tracks.py`)
+### 2. 英語曲名・英語アーティスト名の一括追加 (`populate_english_names.py`)
+既存の `music_meta.db` に対して、英語DJアナウンス用の `title_en` / `artist_en` を一括生成・更新する専用ツールです。ラテン文字曲の即時パススルー、ローカルLLM（Lemonade Server）による公式英題/ローマ字抽出、および `pykakasi` によるフォールバックに対応しています。
+
+```bash
+# 1. 未設定の全曲をハイブリッドモード（英語パススルー ＋ 日本語LLM/kakasi）で更新 (推奨)
+python populate_english_names.py
+
+# 2. 超高速モード（pykakasiのみ使用、全件を数秒〜十数秒で一括ローマ字化）
+python populate_english_names.py --mode kakasi
+
+# 3. 最初の20曲でドライラン（DB更新なし・動作確認）
+python populate_english_names.py --limit 20 --dry-run
+```
+
+### 3. 長尺音源・年号クリーンアップ (`cleanup_long_tracks.py`)
 
 長尺音源の削除に加えて、年号の異常修復や英語解説文のクリーンアップを行えるメンテナンスツールです。
 
