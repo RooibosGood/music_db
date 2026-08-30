@@ -1,7 +1,8 @@
-"""moOde 音声ボット FastAPI Web アプリケーション & エンドポイントモジュール。"""
-
 import json
 import os
+import subprocess
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -14,7 +15,7 @@ from . import config
 from . import coverart
 from . import mpd_client
 from . import state
-from .broadcaster import broadcast_status
+from .broadcaster import broadcast_event, broadcast_process_status, broadcast_status
 from .llm import process_user_message
 
 
@@ -42,6 +43,58 @@ class ChatRequest(BaseModel):
 class ControlRequest(BaseModel):
     action: str
     value: Optional[Any] = None
+
+
+class SystemPowerRequest(BaseModel):
+    action: str  # "shutdown" | "reboot"
+
+
+def _execute_system_power(action: str):
+    """Jetson Orin Nano Super のシャットダウン / 再起動を非同期実行"""
+    time.sleep(1.2)  # クライアントへのレスポンス送信完了待ち
+
+    # moOde 音楽再生の安全停止
+    try:
+        mpd_cli = mpd_client.get_mpd_client()
+        if mpd_cli:
+            mpd_cli.stop()
+            mpd_cli.close()
+            mpd_cli.disconnect()
+            print("⏹️ [System Power] MPD 音楽再生を停止しました。", flush=True)
+    except Exception:
+        pass
+
+    if os.name == "nt":
+        print(f"🖥️ [System Power] Windows (開発環境) のためシミュレーション実行: {action}", flush=True)
+        return
+
+    if action in ("shutdown", "poweroff"):
+        print("⚡ [System Power] Jetson Orin Nano Super をシャットダウンします...", flush=True)
+        commands = [
+            ["sudo", "shutdown", "-h", "now"],
+            ["sudo", "systemctl", "poweroff"],
+            ["systemctl", "poweroff"],
+            ["sudo", "poweroff"],
+            ["sudo", "init", "0"],
+        ]
+        for cmd in commands:
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5)
+            except Exception:
+                pass
+    elif action == "reboot":
+        print("🔄 [System Power] Jetson Orin Nano Super を再起動します...", flush=True)
+        commands = [
+            ["sudo", "reboot"],
+            ["sudo", "systemctl", "reboot"],
+            ["systemctl", "reboot"],
+            ["sudo", "init", "6"],
+        ]
+        for cmd in commands:
+            try:
+                subprocess.run(cmd, capture_output=True, timeout=5)
+            except Exception:
+                pass
 
 
 @app.get("/")
@@ -86,6 +139,46 @@ async def api_player_control(req: ControlRequest):
     res = mpd_client.control_moode(cmd)
     broadcast_status()
     return JSONResponse({"result": res, "status": mpd_client.get_moode_status()})
+
+
+@app.post("/api/system/power")
+async def api_system_power(req: SystemPowerRequest):
+    """Jetson Orin Nano Super のシャットダウン / 再起動を実行"""
+    action = req.action.lower().strip()
+    if action not in ("shutdown", "reboot", "poweroff"):
+        return JSONResponse(
+            {"success": False, "error": "Invalid action. Use 'shutdown' or 'reboot'."},
+            status_code=400,
+        )
+
+    action_label = "シャットダウン (電源OFF)" if action in ("shutdown", "poweroff") else "再起動 (Reboot)"
+    msg = f"⚡ Jetson Orin Nano Super を{action_label}します..."
+
+    # チャット履歴とWebSocketに通知
+    msg_record = {
+        "sender": "assistant",
+        "text": f"⚠️ システムコマンドを受信しました。{action_label}を実行します。",
+        "source": "system",
+        "action": action,
+        "timestamp": time.strftime("%H:%M:%S"),
+    }
+    state.chat_history.append(msg_record)
+    broadcast_event({
+        "type": "system_power",
+        "action": action,
+        "message": msg,
+        "chat_message": msg_record,
+    })
+    broadcast_process_status("idle", f"⚡ システム{action_label}中...")
+
+    # バックグラウンドスレッドでシャットダウン/再起動を実行
+    threading.Thread(target=_execute_system_power, args=(action,), daemon=True).start()
+
+    return JSONResponse({
+        "success": True,
+        "action": action,
+        "message": msg,
+    })
 
 
 @app.get("/api/player/cover")
