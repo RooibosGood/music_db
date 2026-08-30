@@ -50,7 +50,7 @@ class SystemPowerRequest(BaseModel):
 
 
 def _execute_system_power(action: str):
-    """Jetson Orin Nano Super のシャットダウン / 再起動を非同期実行"""
+    """Jetson Orin Nano Super のシャットダウン / 再起動を非同期実行 (多段フォールバック対応)"""
     time.sleep(1.2)  # クライアントへのレスポンス送信完了待ち
 
     # moOde 音楽再生の安全停止
@@ -61,40 +61,71 @@ def _execute_system_power(action: str):
             mpd_cli.close()
             mpd_cli.disconnect()
             print("⏹️ [System Power] MPD 音楽再生を停止しました。", flush=True)
-    except Exception:
-        pass
+    except Exception as mpd_err:
+        print(f"ℹ️ [System Power] MPD停止スキップ: {mpd_err}", flush=True)
 
     if os.name == "nt":
         print(f"🖥️ [System Power] Windows (開発環境) のためシミュレーション実行: {action}", flush=True)
         return
 
+    success = False
+
     if action in ("shutdown", "poweroff"):
         print("⚡ [System Power] Jetson Orin Nano Super をシャットダウンします...", flush=True)
         commands = [
-            ["sudo", "shutdown", "-h", "now"],
-            ["sudo", "systemctl", "poweroff"],
+            # 1. systemd-logind D-Bus経由 (パスワードなしで実行可能な場合あり)
+            ["dbus-send", "--system", "--print-reply", "--dest=org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager.PowerOff", "boolean:true"],
+            # 2. systemctl non-interactive
+            ["systemctl", "poweroff", "-i"],
             ["systemctl", "poweroff"],
+            # 3. sudo non-interactive (NOPASSWD設定がある場合)
+            ["sudo", "-n", "shutdown", "-h", "now"],
+            ["sudo", "-n", "systemctl", "poweroff"],
+            ["sudo", "-n", "poweroff"],
+            # 4. 通常の sudo (tty/環境によるフォールバック)
+            ["sudo", "shutdown", "-h", "now"],
             ["sudo", "poweroff"],
             ["sudo", "init", "0"],
         ]
-        for cmd in commands:
-            try:
-                subprocess.run(cmd, capture_output=True, timeout=5)
-            except Exception:
-                pass
     elif action == "reboot":
         print("🔄 [System Power] Jetson Orin Nano Super を再起動します...", flush=True)
         commands = [
+            # 1. systemd-logind D-Bus経由 (パスワードなしで実行可能な場合あり)
+            ["dbus-send", "--system", "--print-reply", "--dest=org.freedesktop.login1", "/org/freedesktop/login1", "org.freedesktop.login1.Manager.Reboot", "boolean:true"],
+            # 2. systemctl non-interactive
+            ["systemctl", "reboot", "-i"],
+            ["systemctl", "reboot"],
+            # 3. sudo non-interactive (NOPASSWD設定がある場合)
+            ["sudo", "-n", "reboot"],
+            ["sudo", "-n", "systemctl", "reboot"],
+            # 4. 通常の sudo (tty/環境によるフォールバック)
             ["sudo", "reboot"],
             ["sudo", "systemctl", "reboot"],
-            ["systemctl", "reboot"],
             ["sudo", "init", "6"],
         ]
-        for cmd in commands:
-            try:
-                subprocess.run(cmd, capture_output=True, timeout=5)
-            except Exception:
-                pass
+    else:
+        print(f"⚠️ [System Power] 未知のアクション: {action}", flush=True)
+        return
+
+    for cmd in commands:
+        cmd_str = " ".join(cmd)
+        try:
+            print(f"⚡ [System Power] 実行試行: '{cmd_str}'", flush=True)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                print(f"✅ [System Power] コマンド成功: '{cmd_str}'", flush=True)
+                success = True
+                break
+            else:
+                err_msg = res.stderr.strip() or res.stdout.strip()
+                print(f"ℹ️ [System Power] コマンドスキップ ({cmd_str}, code {res.returncode}): {err_msg}", flush=True)
+        except Exception as ex:
+            print(f"ℹ️ [System Power] コマンド実行エラー ({cmd_str}): {ex}", flush=True)
+
+    if not success:
+        print("❌ [System Power] すべての電源制御コマンドの実行に失敗しました。", flush=True)
+        print("💡 Jetson 端末上で一度だけ以下のセットアップスクリプトを実行してください:", flush=True)
+        print("   bash setup_sudo_power.sh", flush=True)
 
 
 @app.get("/")

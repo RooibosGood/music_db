@@ -468,10 +468,16 @@ ProcessCommand --> Idle : 処理実行・返答
     "message": "⚡ Jetson Orin Nano Super を再起動 (Reboot)します..."
   }
   ```
+- **権限設定 (初回のみ要実行)**:
+  Jetson 上で一般ユーザーからパスワードなしでシャットダウン・再起動を実行できるようにするため、初回のみ以下のセットアップスクリプトを Jetson 端末上で1回実行します:
+  ```bash
+  bash setup_sudo_power.sh
+  ```
+  （これにより `/etc/sudoers.d/jetson_power_control` に `NOPASSWD: /sbin/shutdown, /sbin/reboot, /bin/systemctl ...` が自動構成されます）
 - **処理フロー**:
   1. moOde (MPD) の音楽再生を安全に停止。
   2. チャット履歴および WebSocket へシステムシャットダウン/再起動イベント（`system_power`）をブロードキャスト。
-  3. 非同期バックグラウンドスレッドにて `sudo reboot` / `sudo shutdown -h now` （または `systemctl` コマンド）を実行。
+  3. 非同期バックグラウンドスレッドにて D-Bus (`dbus-send`), `systemctl -i`, `sudo -n shutdown -h now` / `sudo -n reboot` などを多段フォールバックで実行。
   4. Web UI 側では確認モーダルによる誤操作防止、および実行中の進捗オーバーレイ・再起動完了後の自動再接続ポーリングを提供。
 
 ---
