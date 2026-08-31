@@ -36,8 +36,240 @@ def _broadcast(step: str, detail: str, auto_idle_sec: Optional[float] = None):
         broadcast_process_status(step, detail, auto_idle_sec=auto_idle_sec)
 
 
+class DemoPlayer:
+    """moOde (MPD) 実機が無い環境向けの仮想プレイヤー（キュー管理・再生時間進行・自動曲送りシミュレーション）"""
+
+    def __init__(self):
+        self.playlist: list = []
+        self.current_index: int = 0
+        self.state: str = "stop"  # "play", "pause", "stop"
+        self.volume: int = 50
+        self.elapsed: float = 0.0
+        self.duration: float = 210.0
+        self.last_tick_time: float = time.time()
+        self._song_id_counter: int = 1
+
+    def _tick(self):
+        """再生中なら経過時間を進め、曲終了時に自動で次の曲または停止へ遷移"""
+        now = time.time()
+        dt = now - self.last_tick_time
+        self.last_tick_time = now
+
+        if self.state == "play" and self.playlist:
+            self.elapsed += dt
+            if self.elapsed >= self.duration:
+                # 曲が終了した
+                if self.current_index < len(self.playlist) - 1:
+                    self.current_index += 1
+                    self.elapsed = 0.0
+                    cur = self.get_current_song()
+                    self.duration = float(cur.get("duration", 210.0))
+                else:
+                    self.state = "stop"
+                    self.elapsed = 0.0
+
+    def clear(self):
+        self._tick()
+        self.playlist = []
+        self.current_index = 0
+        self.state = "stop"
+        self.elapsed = 0.0
+
+    def add(self, file_path: str):
+        self._tick()
+        norm_path = file_path.replace("\\", "/")
+        db_meta = find_track_metadata(file_path=norm_path)
+        if not db_meta:
+            fname = norm_path.split("/")[-1]
+            title = fname.rsplit(".", 1)[0] if "." in fname else fname
+            artist = "Demo Artist"
+            album = "moOde Demo Library"
+            is_hires = False
+            title_en = ""
+            artist_en = ""
+            desc_ja = ""
+            desc_en = ""
+        else:
+            title = db_meta.get("title", "")
+            artist = db_meta.get("artist", "")
+            album = db_meta.get("album", "")
+            is_hires = bool(db_meta.get("is_hires", 0))
+            title_en = db_meta.get("title_en", "")
+            artist_en = db_meta.get("artist_en", "")
+            desc_ja = db_meta.get("description_ja", "")
+            desc_en = db_meta.get("description_en", "")
+
+        song_id = str(self._song_id_counter)
+        self._song_id_counter += 1
+
+        item = {
+            "file": norm_path,
+            "id": song_id,
+            "title": title,
+            "artist": artist,
+            "album": album,
+            "title_en": title_en,
+            "artist_en": artist_en,
+            "description_ja": desc_ja,
+            "description_en": desc_en,
+            "duration": 210.0,
+            "time": "210",
+            "is_hires": is_hires,
+            "audio": "96000:24:2" if is_hires else "44100:16:2",
+        }
+        self.playlist.append(item)
+        if len(self.playlist) == 1:
+            self.duration = item["duration"]
+
+    def play(self, pos: Optional[int] = None):
+        self._tick()
+        if pos is not None and 0 <= int(pos) < len(self.playlist):
+            self.current_index = int(pos)
+            self.elapsed = 0.0
+        if self.playlist:
+            self.state = "play"
+            cur = self.get_current_song()
+            self.duration = float(cur.get("duration", 210.0))
+        self.last_tick_time = time.time()
+
+    def pause(self, pause_flag: int = 1):
+        self._tick()
+        if int(pause_flag) == 1:
+            self.state = "pause"
+        else:
+            self.state = "play"
+        self.last_tick_time = time.time()
+
+    def stop(self):
+        self._tick()
+        self.state = "stop"
+        self.elapsed = 0.0
+
+    def next(self):
+        self._tick()
+        if self.playlist and self.current_index < len(self.playlist) - 1:
+            self.current_index += 1
+            self.elapsed = 0.0
+            cur = self.get_current_song()
+            self.duration = float(cur.get("duration", 210.0))
+        else:
+            self.state = "stop"
+            self.elapsed = 0.0
+
+    def previous(self):
+        self._tick()
+        if self.playlist and self.current_index > 0:
+            self.current_index -= 1
+            self.elapsed = 0.0
+            cur = self.get_current_song()
+            self.duration = float(cur.get("duration", 210.0))
+
+    def setvol(self, vol: int):
+        self.volume = max(0, min(100, int(vol)))
+
+    def get_current_song(self) -> Dict[str, Any]:
+        if 0 <= self.current_index < len(self.playlist):
+            return self.playlist[self.current_index]
+        return {}
+
+    def status(self) -> Dict[str, Any]:
+        self._tick()
+        cur = self.get_current_song()
+        return {
+            "state": self.state,
+            "volume": str(self.volume),
+            "elapsed": f"{self.elapsed:.2f}",
+            "duration": f"{self.duration:.2f}",
+            "playlistlength": str(len(self.playlist)),
+            "song": str(self.current_index) if self.playlist else "0",
+            "songid": cur.get("id", ""),
+            "audio": cur.get("audio", "44100:16:2"),
+        }
+
+    def currentsong(self) -> Dict[str, Any]:
+        self._tick()
+        return self.get_current_song()
+
+    def playlistinfo(self) -> list:
+        self._tick()
+        return list(self.playlist)
+
+    def search(self, search_type: str, query: str) -> list:
+        # music_meta.db から検索
+        db_tracks = search_tracks_from_db(query, limit=5)
+        if db_tracks:
+            return [
+                {
+                    "file": t.get("relative_path") or t.get("file_path") or query,
+                    "title": t.get("title", ""),
+                    "artist": t.get("artist", ""),
+                }
+                for t in db_tracks
+            ]
+        return [{"file": query, "title": query, "artist": "Demo"}]
+
+
+# シングルトン DemoPlayer インスタンス
+demo_player = DemoPlayer()
+
+
+class MockMPDClient:
+    """python-mpd2 MPDClient のインターフェース互換モック"""
+
+    def __init__(self):
+        self.player = demo_player
+
+    def connect(self, host: str, port: int):
+        pass
+
+    def close(self):
+        pass
+
+    def disconnect(self):
+        pass
+
+    def clear(self):
+        self.player.clear()
+
+    def add(self, uri: str):
+        self.player.add(uri)
+
+    def search(self, search_type: str, query: str):
+        return self.player.search(search_type, query)
+
+    def playlistinfo(self):
+        return self.player.playlistinfo()
+
+    def currentsong(self):
+        return self.player.currentsong()
+
+    def status(self):
+        return self.player.status()
+
+    def play(self, pos: Optional[int] = None):
+        self.player.play(pos)
+
+    def pause(self, pause_flag: int = 1):
+        self.player.pause(pause_flag)
+
+    def stop(self):
+        self.player.stop()
+
+    def next(self):
+        self.player.next()
+
+    def previous(self):
+        self.player.previous()
+
+    def setvol(self, vol: int):
+        self.player.setvol(vol)
+
+
 def get_mpd_client() -> Optional[Any]:
-    """MPD クライアントの接続を取得"""
+    """MPD クライアントの接続を取得（デモモード時は MockMPDClient を返却）"""
+    if getattr(config, "DEMO_MODE", False):
+        return MockMPDClient()
+
     if MPDClient is None:
         return None
     try:
@@ -45,16 +277,19 @@ def get_mpd_client() -> Optional[Any]:
         client.timeout = 5
         client.connect(config.MOODE_IP, config.MOODE_PORT)
         return client
-    except Exception as e:
+    except Exception:
         return None
 
 
 def get_moode_status() -> Dict[str, Any]:
     """moOde の再生ステータスと現在曲情報を取得"""
     client = get_mpd_client()
+    is_demo = getattr(config, "DEMO_MODE", False) or isinstance(client, MockMPDClient)
+
     if client is None:
         return {
             "connected": False,
+            "is_demo": False,
             "state": "stop",
             "volume": "50",
             "elapsed": 0,
@@ -82,10 +317,10 @@ def get_moode_status() -> Dict[str, Any]:
         song_album = song.get("album") or "moOde Audio Library"
 
         db_meta = find_track_metadata(file_path=song_file, title=song_title, artist=song_artist)
-        description_ja = db_meta.get("description_ja", "") if db_meta else ""
-        description_en = db_meta.get("description_en", "") if db_meta else ""
-        title_en = db_meta.get("title_en", "") if db_meta else ""
-        artist_en = db_meta.get("artist_en", "") if db_meta else ""
+        description_ja = (db_meta.get("description_ja", "") if db_meta else "") or song.get("description_ja", "")
+        description_en = (db_meta.get("description_en", "") if db_meta else "") or song.get("description_en", "")
+        title_en = (db_meta.get("title_en", "") if db_meta else "") or song.get("title_en", "")
+        artist_en = (db_meta.get("artist_en", "") if db_meta else "") or song.get("artist_en", "")
         description = (description_en if config.ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
         song_info = {
@@ -98,7 +333,7 @@ def get_moode_status() -> Dict[str, Any]:
             "id": song.get("id", ""),
             "sample_rate": sample_rate,
             "bit_depth": bit_depth,
-            "is_hires": (int(sample_rate) > 48000 or int(bit_depth) > 16) if sample_rate.isdigit() and bit_depth.isdigit() else (db_meta.get("is_hires", 0) == 1 if db_meta else False),
+            "is_hires": (int(sample_rate) > 48000 or int(bit_depth) > 16) if sample_rate.isdigit() and bit_depth.isdigit() else (db_meta.get("is_hires", 0) == 1 if db_meta else song.get("is_hires", False)),
             "description": description,
             "description_ja": description_ja,
             "description_en": description_en,
@@ -106,6 +341,7 @@ def get_moode_status() -> Dict[str, Any]:
 
         return {
             "connected": True,
+            "is_demo": is_demo,
             "state": status.get("state", "stop"),
             "volume": status.get("volume", "50"),
             "elapsed": float(status.get("elapsed", 0)),
@@ -115,6 +351,7 @@ def get_moode_status() -> Dict[str, Any]:
     except Exception as e:
         return {
             "connected": False,
+            "is_demo": is_demo,
             "error": str(e),
             "state": "stop",
             "volume": "50",

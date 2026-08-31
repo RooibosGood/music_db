@@ -148,6 +148,59 @@ async def api_chat(req: ChatRequest):
     return JSONResponse(res)
 
 
+class SettingsUpdateRequest(BaseModel):
+    demo_mode: Optional[bool] = None
+    language: Optional[str] = None
+    english_voice: Optional[str] = None
+    enable_daily_info: Optional[bool] = None
+    enable_voice_listener: Optional[bool] = None
+    moode_ip: Optional[str] = None
+    moode_port: Optional[int] = None
+    speaker_id: Optional[int] = None
+
+
+@app.get("/api/settings")
+async def api_get_settings():
+    """現在のシステム設定値を取得"""
+    return JSONResponse(config.get_current_settings())
+
+
+@app.post("/api/settings")
+async def api_update_settings(req: SettingsUpdateRequest):
+    """システム設定値を更新し、voice_bot_config.json に保存"""
+    updates = {}
+    if req.demo_mode is not None:
+        updates["demo_mode"] = req.demo_mode
+    if req.language is not None:
+        updates.setdefault("announcement", {})["language"] = req.language
+    if req.english_voice is not None:
+        updates.setdefault("announcement", {})["english_voice"] = req.english_voice
+    if req.speaker_id is not None:
+        updates.setdefault("announcement", {})["speaker_id"] = req.speaker_id
+    if req.enable_daily_info is not None:
+        updates.setdefault("weather_and_daily_info", {})["enable"] = req.enable_daily_info
+    if req.enable_voice_listener is not None:
+        updates.setdefault("audio", {})["enable_voice_listener"] = req.enable_voice_listener
+    if req.moode_ip is not None:
+        updates.setdefault("moode", {})["ip"] = req.moode_ip
+    if req.moode_port is not None:
+        updates.setdefault("moode", {})["port"] = req.moode_port
+
+    success = config.save_config_to_file(updates)
+
+    # 全クライアントに状態更新を通知
+    broadcast_status()
+    broadcast_event({
+        "type": "settings_updated",
+        "settings": config.get_current_settings(),
+    })
+
+    return JSONResponse({
+        "success": success,
+        "settings": config.get_current_settings(),
+    })
+
+
 @app.get("/api/status")
 async def api_status():
     """現在の moOde 再生情報 & システム状態を取得"""
@@ -158,6 +211,7 @@ async def api_status():
         "process_status": state.current_processing_state,
         "moode_ip": f"{config.MOODE_IP}:{config.MOODE_PORT}",
         "language": config.ANNOUNCE_LANGUAGE,
+        "demo_mode": config.DEMO_MODE,
         "llm_model": config.LLM_MODEL,
         "enable_voice_listener": config.ENABLE_VOICE_LISTENER,
     })
@@ -260,6 +314,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "voice_status": state.voice_state,
                     "process_status": state.current_processing_state,
                     "language": config.ANNOUNCE_LANGUAGE,
+                    "demo_mode": config.DEMO_MODE,
                     "enable_voice_listener": config.ENABLE_VOICE_LISTENER,
                     "history": state.chat_history,
                 },

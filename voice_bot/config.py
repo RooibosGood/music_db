@@ -8,6 +8,9 @@ except ImportError:
     pyaudio = None
 
 
+# ==================== デモモード設定 ====================
+DEMO_MODE: bool = False  # moOde実機なしで選曲・再生・解説・ステータス更新をシミュレーションするデモモード
+
 # ==================== moOde / MPD 設定 ====================
 MOODE_IP: str = "192.168.68.198"  # moOde (Raspberry Pi 5) の IP アドレス
 MOODE_PORT: int = 6600
@@ -64,7 +67,7 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
     import json
     import os
 
-    global MOODE_IP, MOODE_PORT, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
+    global DEMO_MODE, MOODE_IP, MOODE_PORT, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
     global ANNOUNCE_LANGUAGE, ENGLISH_VOICE, AUDIO_OUTPUT_NAME, AUDIO_OUTPUT_DEV
     global VOICE_PRE_SILENCE_SEC, INPUT_DEVICE_NAME, INPUT_DEVICE_INDEX
     global ENABLE_DAILY_INFO, WEATHER_CITY, WEATHER_CITY_JA, WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_TIMEZONE
@@ -95,8 +98,14 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
         with open(target_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
+        # デモモード設定
+        if "demo_mode" in data:
+            DEMO_MODE = bool(data["demo_mode"])
+
         # moOde 設定
         moode_cfg = data.get("moode", {})
+        if "demo_mode" in moode_cfg:
+            DEMO_MODE = bool(moode_cfg["demo_mode"])
         if "ip" in moode_cfg:
             MOODE_IP = str(moode_cfg["ip"])
         if "port" in moode_cfg:
@@ -166,6 +175,131 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
     except Exception as e:
         print(f"⚠️ [config] 設定ファイル読み込みエラー ({target_path}): {e}")
         return None
+
+
+def get_current_settings() -> dict:
+    """現在の設定値一覧を辞書形式で取得"""
+    return {
+        "demo_mode": DEMO_MODE,
+        "moode": {
+            "ip": MOODE_IP,
+            "port": MOODE_PORT,
+        },
+        "announcement": {
+            "language": ANNOUNCE_LANGUAGE,
+            "english_voice": ENGLISH_VOICE,
+            "voicevox_url": VOICEVOX_URL,
+            "speaker_id": SPEAKER_ID,
+        },
+        "llm": {
+            "model": LLM_MODEL,
+            "llama_cpp_chat_url": LLAMA_CPP_CHAT_URL,
+        },
+        "audio": {
+            "output_device_name": AUDIO_OUTPUT_NAME,
+            "output_alsa_dev": AUDIO_OUTPUT_DEV,
+            "input_device_name": INPUT_DEVICE_NAME,
+            "input_device_index": INPUT_DEVICE_INDEX,
+            "enable_voice_listener": ENABLE_VOICE_LISTENER,
+        },
+        "weather_and_daily_info": {
+            "enable": ENABLE_DAILY_INFO,
+            "city": WEATHER_CITY,
+            "city_ja": WEATHER_CITY_JA,
+            "latitude": WEATHER_LATITUDE,
+            "longitude": WEATHER_LONGITUDE,
+            "timezone": WEATHER_TIMEZONE,
+        },
+        "server": {
+            "host": SERVER_HOST,
+            "port": SERVER_PORT,
+        },
+        "config_file_path": CONFIG_FILE_PATH,
+    }
+
+
+def save_config_to_file(updates: dict) -> bool:
+    """設定変更を voice_bot_config.json に保存し、内部のグローバル設定変数を更新する。"""
+    import json
+    import os
+
+    global DEMO_MODE, MOODE_IP, MOODE_PORT, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
+    global ANNOUNCE_LANGUAGE, ENGLISH_VOICE, AUDIO_OUTPUT_NAME, AUDIO_OUTPUT_DEV
+    global VOICE_PRE_SILENCE_SEC, INPUT_DEVICE_NAME, INPUT_DEVICE_INDEX
+    global ENABLE_DAILY_INFO, WEATHER_CITY, WEATHER_CITY_JA, WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_TIMEZONE
+    global SERVER_HOST, SERVER_PORT, ENABLE_VOICE_LISTENER, CONFIG_FILE_PATH
+
+    target_path = CONFIG_FILE_PATH
+    if not target_path:
+        project_root = os.path.dirname(os.path.dirname(__file__))
+        target_path = os.path.join(project_root, "voice_bot_config.json")
+
+    data = {}
+    if os.path.exists(target_path):
+        try:
+            with open(target_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    # デモモード
+    if "demo_mode" in updates:
+        val = bool(updates["demo_mode"])
+        DEMO_MODE = val
+        data["demo_mode"] = val
+
+    # moOde
+    if "moode" in updates:
+        moode_cfg = data.setdefault("moode", {})
+        if "ip" in updates["moode"]:
+            MOODE_IP = str(updates["moode"]["ip"])
+            moode_cfg["ip"] = MOODE_IP
+        if "port" in updates["moode"]:
+            MOODE_PORT = int(updates["moode"]["port"])
+            moode_cfg["port"] = MOODE_PORT
+        if "demo_mode" in updates["moode"]:
+            DEMO_MODE = bool(updates["moode"]["demo_mode"])
+            data["demo_mode"] = DEMO_MODE
+
+    # アナウンス
+    if "announcement" in updates:
+        ann_cfg = data.setdefault("announcement", {})
+        if "language" in updates["announcement"]:
+            ANNOUNCE_LANGUAGE = str(updates["announcement"]["language"])
+            ann_cfg["language"] = ANNOUNCE_LANGUAGE
+        if "english_voice" in updates["announcement"]:
+            ENGLISH_VOICE = str(updates["announcement"]["english_voice"])
+            ann_cfg["english_voice"] = ENGLISH_VOICE
+        if "voicevox_url" in updates["announcement"]:
+            VOICEVOX_URL = str(updates["announcement"]["voicevox_url"])
+            ann_cfg["voicevox_url"] = VOICEVOX_URL
+        if "speaker_id" in updates["announcement"]:
+            SPEAKER_ID = int(updates["announcement"]["speaker_id"])
+            ann_cfg["speaker_id"] = SPEAKER_ID
+
+    # 天気・デイリー情報
+    if "weather_and_daily_info" in updates:
+        w_cfg = data.setdefault("weather_and_daily_info", {})
+        if "enable" in updates["weather_and_daily_info"]:
+            ENABLE_DAILY_INFO = bool(updates["weather_and_daily_info"]["enable"])
+            w_cfg["enable"] = ENABLE_DAILY_INFO
+
+    # 音声リスナー
+    if "audio" in updates:
+        a_cfg = data.setdefault("audio", {})
+        if "enable_voice_listener" in updates["audio"]:
+            ENABLE_VOICE_LISTENER = bool(updates["audio"]["enable_voice_listener"])
+            a_cfg["enable_voice_listener"] = ENABLE_VOICE_LISTENER
+
+    try:
+        with open(target_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        CONFIG_FILE_PATH = target_path
+        print(f"✅ [config] 設定を保存しました: {target_path} (demo_mode={DEMO_MODE}, lang={ANNOUNCE_LANGUAGE})")
+        return True
+    except Exception as e:
+        print(f"❌ [config] 設定保存エラー ({target_path}): {e}")
+        return False
 
 
 

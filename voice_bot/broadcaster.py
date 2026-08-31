@@ -64,7 +64,7 @@ def broadcast_process_status(step: str, detail: str, auto_idle_sec: Optional[flo
 
 
 def broadcast_status():
-    """現在の moOde 再生状態、音声ステータス、処理ステータス、および言語モードをプッシュ"""
+    """現在の moOde 再生状態、音声ステータス、処理ステータス、および言語モード・デモモードをプッシュ"""
     player_status = mpd_client.get_moode_status()
     broadcast_event({
         "type": "status_update",
@@ -72,4 +72,5 @@ def broadcast_status():
         "voice_status": state.voice_state,
         "process_status": state.current_processing_state,
         "language": config.ANNOUNCE_LANGUAGE,
+        "demo_mode": config.DEMO_MODE,
     })

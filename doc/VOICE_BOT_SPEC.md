@@ -11,9 +11,12 @@
 ユーザーのマイク入力（音声）およびWebブラウザ（テキストチャット）双方からの要望を受け付け、ローカルLLMによって意図を解釈し、moOde audio の選曲・再生制御を行うとともに、楽曲データベース（`music_meta.db`）に蓄積されたリッチな解説文を音声合成（英語 FM DJ / 日本語 VOICEVOX）および画面表示で案内します。
 
 ### 1.2 主な特徴
-- **ハイブリッドUI（音声 ＋ Web Chat）**:
+- **ハイブリッドUI（音声 ＋ Web Chat ＋ 設定画面）**:
   - マイクからのウェイクワード音声入力（「ヘイ、マスター」/「Hey Master」）に対応。
   - PCやスマートフォンのWebブラウザからアクセス可能なグラスモフィズムUIを提供。
+  - **Settings（設定）モーダル**: デモモードのON/OFF、言語モード切替、デイリー情報ON/OFF、moOde接続先変更をWeb上から即時設定・永続化保存。
+- **デモモード (Demo Mode / Mock MPD)**:
+  - moOde (Raspberry Pi 5) 実機が接続されていない環境でも、`music_meta.db` を活用した選曲・再生・曲送り・アルバムジャケット表示・解説文読み上げの操作性を完全シミュレーション体験可能。
 - **完全ローカル / 高速エッジ処理**:
   - 音声認識: **faster-whisper**（Smallモデル / CPU int8）
   - 意図抽出・対話: **llama.cpp (Google Gemma 4 E2B IT GGUF)**
@@ -144,18 +147,18 @@ Audio_SQL/
 
 | モジュール | 主な責務・提供機能 |
 | :--- | :--- |
-| **`voice_bot_config.json`** | システム全体の設定ファイル。moOde IP・ポート、LLMモデル、アナウンス言語、オーディオデバイス、滋賀県栗東市等の天気設定、Webサーバー設定を管理。 |
-| **`voice_bot/config.py`** | `load_config_from_file()` による `voice_bot_config.json` の自動パース・反映および各種定数・デフォルト値管理。 |
+| **`voice_bot_config.json`** | システム全体の設定ファイル。デモモード、moOde IP・ポート、LLMモデル、アナウンス言語、オーディオデバイス、滋賀県栗東市等の天気設定、Webサーバー設定を管理。 |
+| **`voice_bot/config.py`** | `load_config_from_file()` による `voice_bot_config.json` の自動パース・反映、`save_config_to_file()` による設定保存・永続化、および `get_current_settings()`。 |
 | **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、および llama.cpp LLM を用いた起動時デイリーナレーションの自動生成・フォールバック合成。 |
 | **`voice_bot/state.py`** | `chat_history`, `active_websockets`, `voice_state`, `current_processing_state` の定義および同一曲判定ヘルパー `is_same_track()`。 |
 | **`voice_bot/broadcaster.py`** | `broadcast_event()`, `broadcast_process_status()`, `broadcast_status()` による WebSocket 全体へのリアルタイムプッシュ通信。 |
 | **`voice_bot/llm.py`** | `http_post_json()`, `parse_intent_with_llm()` による LLM 意図解析、および `process_user_message()` による音声・チャット共通処理エンジン。 |
 | **`voice_bot/watcher.py`** | `run_track_watcher_loop()` による moOde 再生曲変更の常時監視と自動曲紹介発話、`play_startup_greeting()` による起動アナウンス（基本案内＋デイリーインフォメーション統合）。 |
 | **`voice_bot/stt.py`** | `init_whisper()`, `record_audio_stream()`, `speech_to_text()`, `run_voice_loop()` によるマイク入力監視・ウェイクワード検知。 |
-| **`voice_bot/api.py`** | FastAPI インスタンス作成、静的ファイル配信 (`/`)、REST API (`/api/chat`, `/api/status`, `/api/player/control`, `/api/player/cover`, `/api/history`)、WebSocket (`/ws`)。 |
+| **`voice_bot/api.py`** | FastAPI インスタンス作成、静的ファイル配信 (`/`)、REST API (`/api/chat`, `/api/status`, `/api/settings`, `/api/player/control`, `/api/player/cover`, `/api/history`)、WebSocket (`/ws`)。 |
 | **`voice_bot/main.py`** | `voice_bot_config.json` の先行ロード、CLI 引数解析 (`argparse`) による上書き、監視スレッド・音声ループ起動、Uvicorn サーバー起動。 |
 | **`voice_bot/coverart.py`** | アルバムアートの多段探索（ローカル ➔ MPD albumart ➔ readpicture ➔ moOde coverart.php ➔ iTunes API ➔ Deezer API ➔ デフォルトSVG）とキャッシュ。 |
-| **`voice_bot/mpd_client.py`** | MPD クライアント接続管理、`control_moode()` による再生・一時停止・選曲・音量制御、`get_moode_status()` による詳細再生情報取得。 |
+| **`voice_bot/mpd_client.py`** | MPD クライアント接続管理、`control_moode()` による再生・一時停止・選曲・音量制御、`get_moode_status()` による詳細再生情報取得、および `DemoPlayer` / `MockMPDClient` によるデモモードシミュレーション。 |
 | **`voice_bot/tts.py`** | `speak()` (VOICEVOX), `speak_english()` (edge-tts / Google TTS), `build_english_track_announcement()` による曲紹介文生成、ALSA デバイス検出。 |
 | **`voice_bot.py`** | ルート直下の互換起動用 thin wrapper (`from voice_bot.main import main; main()`)。 |
 
@@ -426,11 +429,48 @@ ProcessCommand --> Idle : 処理実行・返答
 ---
 
 ### 6.3 `GET /api/status`
-- **概要**: 現在の moOde 再生ステータス、現在曲詳細、音声リスナー状態、言語モード、LLMモデルを取得。
+- **概要**: 現在の moOde 再生ステータス、現在曲詳細、音声リスナー状態、言語モード、デモモード状態、LLMモデルを取得。
 
 ---
 
-### 6.4 `POST /api/player/control`
+### 6.4 `GET /api/settings`
+- **概要**: 現在のシステム設定一覧（デモモード、moOde接続先、アナウンス言語、デイリー情報有効化等）を取得。
+- **Response Body (JSON)**:
+  ```json
+  {
+    "demo_mode": false,
+    "moode": { "ip": "192.168.68.198", "port": 6600 },
+    "announcement": { "language": "en", "english_voice": "en-US-ChristopherNeural", "speaker_id": 13 },
+    "weather_and_daily_info": { "enable": true, "city": "Ritto, Shiga" },
+    "audio": { "enable_voice_listener": false }
+  }
+  ```
+
+---
+
+### 6.5 `POST /api/settings`
+- **概要**: システム設定値を更新し、`voice_bot_config.json` へ永続化保存した上で全 WebSocket クライアントへ変更を通知。
+- **Request Body (JSON)**:
+  ```json
+  {
+    "demo_mode": true,
+    "language": "ja",
+    "enable_daily_info": true,
+    "moode_ip": "192.168.68.198",
+    "moode_port": 6600
+  }
+  ```
+- **Response Body (JSON)**:
+  ```json
+  {
+    "success": true,
+    "settings": { ... }
+  }
+  ```
+
+---
+
+### 6.6 `POST /api/player/control`
 - **概要**: Web UI のボタン等から再生・一時停止・音量変更を直接操作。
 - **Request Body (JSON)**:
   ```json
@@ -442,7 +482,7 @@ ProcessCommand --> Idle : 処理実行・返答
 
 ---
 
-### 6.5 `GET /api/player/cover`
+### 6.7 `GET /api/player/cover`
 - **概要**: 再生中楽曲または指定楽曲のアルバムジャケット画像（Cover Art）を取得。
 - **Query Parameters**: `file`, `artist`, `album`, `title` (すべて任意)
 - **Response**: 画像バイナリ (`image/jpeg` または `image/svg+xml`)
