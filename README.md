@@ -7,6 +7,7 @@ NASなどのストレージに保存された楽曲ファイル（MP3 / FLAC）�
 > - NAS音楽ジャンル洗い出し仕様書: [doc/SCAN_GENRES_SPEC.md](doc/SCAN_GENRES_SPEC.md)
 > - 楽曲解説文修復ツール仕様書: [doc/FIX_DESCRIPTIONS_SPEC.md](doc/FIX_DESCRIPTIONS_SPEC.md)
 > - 音声＆Web AIアシスタント仕様書: [doc/VOICE_BOT_SPEC.md](doc/VOICE_BOT_SPEC.md)
+> - ReplayGain音量メタデータ管理仕様書: [doc/REPLAYGAIN_SPEC.md](doc/REPLAYGAIN_SPEC.md)
 
 ---
 
@@ -301,4 +302,32 @@ http://<Jetson-IPアドレス>:8000
   - `「次の曲にして」` / `「スキップ」`
   - `「前の曲に戻って」`
   - `「今日はどんな天気？」` などの一般的な雑談にも回答可能
+
+---
+
+## Windows / NAS 向け 非破壊 ReplayGain ツール (`apply_replaygain_win.py`)
+
+ライブラリ内の音声ファイルに対し、**音声データ領域には 1ビットも触れず**、タグ情報領域に EBU R128 準拠の音量調整指示値（Track Gain / Album Gain [dB]）を書き込むツールです。
+いつでもタグを削除（`--remove-tags`）して元の初期状態に完全復元できます。
+
+> 📖 **詳細な仕様・コマンドオプション**: [doc/REPLAYGAIN_SPEC.md](doc/REPLAYGAIN_SPEC.md)
+
+### 主なコマンド
+
+```bash
+# 1. NASの音楽ライブラリを標準設定でスキャン・新規タグ付加
+python apply_replaygain_win.py
+
+# 2. ネットワークドライブ Z:\Music を指定して実行
+python apply_replaygain_win.py --dir "Z:\Music"
+
+# 3. 既存タグの付加状況を確認・スキャン（変更なし）
+python apply_replaygain_win.py --check
+
+# 4. 【原状復帰】全音源から ReplayGain タグを完全消去
+python apply_replaygain_win.py --remove-tags
+
+# 5. 書き込みを行わずにシミュレーション
+python apply_replaygain_win.py --dry-run
+```
 
