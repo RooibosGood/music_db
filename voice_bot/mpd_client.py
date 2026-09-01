@@ -429,6 +429,7 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                     last_announced_songid = ""
 
                 result["tracks_added"] = [t.get("title", "") for t in added_tracks]
+                result["selected_tracks_meta"] = added_tracks if added_tracks else db_tracks
                 result["track_info"] = {
                     "title": first_title,
                     "artist": first_artist,

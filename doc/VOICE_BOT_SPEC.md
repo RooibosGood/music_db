@@ -311,24 +311,31 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 
 ---
 
-### 5.5 音声合成・出力 (`voice_bot/tts.py`)
+### 5.5 音声合成・選曲俯瞰アナウンス (`voice_bot/tts.py`)
 
 曲紹介アナウンスは **英語DJモード (`--lang en` / `--en`, デフォルト)** および **日本語モード (`--lang ja` / `--ja`)** に対応しています。
 
-#### 1. 英語DJモード (`build_english_track_announcement`, `speak_english`)
-- **英語DJナレーション生成 (`build_english_track_announcement`)**:
-  - データベース（`music_meta.db`）の **`title_en`（英語曲名・ローマ字）および `artist_en`（英語アーティスト名・ローマ字）を最優先活用**。
-  - `title_en` / `artist_en` が未登録、または日本語文字（漢字・ひらがな・カタカナ）が残存している場合は、**`pykakasi` によるヘボン式ローマ字変換（`to_roman_if_japanese`）を自動適用**（`pykakasi` 未インストール環境でも安全にフォールバック）。
-  - データベースの **`description_en`（英語解説文）を直接結合**して流暢な英語曲紹介文を生成。
-  - タイトル、アーティスト、および `description_en` を組み合わせたFMラジオDJスタイル（例: `Now playing: 'Sparkle' by Tatsuro Yamashita. 'Sparkle' is a signature city pop classic...` / 次曲: `Next up is '...' by ...` / スキップ: `Skipping to '...' by ...`）。
-- **英語音声合成 (`speak_english`)**:
+#### 1. 選曲時の全体俯瞰ナレーション生成 (`build_playlist_overview_announcement`)
+選曲時（`play_search`）に、キューに追加された曲群（プレイリスト）全体の特徴（選曲テーマ、主なアーティスト、ジャンル、曲数）を俯瞰したオープニングコメントと1曲目の紹介を自然に組み立てます。
+
+- **日本語モード (VOICEVOX)**:
+  - 単一アーティスト例: `「ビートルズの代表曲全15曲をセレクトしました。まずは1曲目、『Let It Be』からお届けします。1970年のラストアルバム表題曲です。」`
+  - 複数アーティスト/ジャンル例: `「『ジャズ』から、デイヴ・ブルーベックやマイルス・デイヴィスなどの名曲全15曲をセレクトしました。まずは1曲目、『Take Five』（デイヴ・ブルーベック）からお届けします。1959年の名盤『Time Out』収録の代表曲です。」`
+  - llama.cpp LLM が利用可能な場合は、より臨場感あふれるラジオ番組風のイントロを動的に生成し、タイムアウト・オフライン時は洗練されたテンプレートで即座にフォールバック合成。
+- **英語DJモード (edge-tts)**:
+  - 例: `I've lined up 15 great jazz tracks featuring Dave Brubeck and Miles Davis. Let's get started with 'Take Five' by Dave Brubeck. A 1959 jazz standard in 5/4 time.`
+
+#### 2. 単曲・トラック自動切り替わりアナウンス (`build_english_track_announcement`, `build_japanese_track_announcement`)
+- スキップ時や 2曲目以降の自動再生遷移時には、単曲ごとの背景・解説をスマートに紹介（例: `Next up is '...' by ...` / `「続いては、『...』をお届けします。」`）。
+- データベース（`music_meta.db`）の **`title_en` / `artist_en` / `description_en`** および **`description_ja`** を最大限活用。
+- 日本語文字が含まれる場合は `pykakasi` によるローマ字変換、日本語読み上げ時は `convert_english_to_katakana` によるカタカナ変換を自動適用。
+
+#### 3. 音声合成エンジン (`speak_english`, `speak`)
+- **英語DJモード (`speak_english`)**:
   - **edge-tts (最優先)**: `en-US-ChristopherNeural` などの超高音質ニューラル音声で再生。
   - **Google TTS / espeak-ng / VOICEVOX (フォールバック)**。
-
-#### 2. 日本語モード (`speak`, `convert_english_to_katakana`)
-- **英語発音カタカナ化 (`convert_english_to_katakana`)**: 有名アーティスト・曲名をカタカナに自動変換し、VOICEVOX で読み上げ。
-- **無音パディング付加**: 生成された WAV の先頭に `0.3秒` 分の無音 PCM データを付加（オーディオインターフェースの立ち上がり遅延による「頭切れ」防止）。
-- **ALSA aplay 再生**: `aplay -D plughw:0,0 -q temp.wav` を実行（エラー時は `default` でリトライ）。
+- **日本語モード (`speak`, `convert_english_to_katakana`)**:
+  - **VOICEVOX (青山龍星)**: 英語のカタカナ自動変換、先頭無音パディング付加による頭切れ防止、ALSA aplay 再生。
 
 ---
 

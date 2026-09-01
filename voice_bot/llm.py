@@ -180,13 +180,32 @@ def process_user_message(
 
     # 3. 再生・スキップ時、曲紹介文を構築
     if cmd.get("action") in ("play_search", "next", "previous") and control_res.get("success"):
+        selected_tracks = control_res.get("selected_tracks_meta") or []
+        is_play_search = (cmd.get("action") == "play_search")
+
         if config.ANNOUNCE_LANGUAGE == "en":
-            is_skip = cmd.get("action") in ("next", "previous")
-            reply_text = tts.build_english_track_announcement(track_info, is_next=False, is_skip=is_skip)
+            if is_play_search and selected_tracks:
+                reply_text = tts.build_playlist_overview_announcement(
+                    selected_tracks=selected_tracks,
+                    query=cmd.get("query", ""),
+                    first_track=track_info,
+                    language="en",
+                )
+            else:
+                is_skip = cmd.get("action") in ("next", "previous")
+                reply_text = tts.build_english_track_announcement(track_info, is_next=False, is_skip=is_skip)
             print(f"🎙️ [English DJ ナレーション] {reply_text}", flush=True)
         else:
-            prefix = "次の曲、" if cmd.get("action") == "next" else ("前の曲、" if cmd.get("action") == "previous" else "")
-            reply_text = tts.build_japanese_track_announcement(track_info, description=description, prefix=prefix)
+            if is_play_search and selected_tracks:
+                reply_text = tts.build_playlist_overview_announcement(
+                    selected_tracks=selected_tracks,
+                    query=cmd.get("query", ""),
+                    first_track=track_info,
+                    language="ja",
+                )
+            else:
+                prefix = "次の曲、" if cmd.get("action") == "next" else ("前の曲、" if cmd.get("action") == "previous" else "")
+                reply_text = tts.build_japanese_track_announcement(track_info, description=description, prefix=prefix)
             print(f"📖 [音声案内テキスト] {reply_text}", flush=True)
 
     # 4. 音声読み上げと moOde 音楽再生の順序制御（解説文を話し終えてから再生）

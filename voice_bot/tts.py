@@ -656,7 +656,7 @@ def build_japanese_track_announcement(
     description: str = "",
     prefix: str = "",
 ) -> str:
-    """曲情報から日本語の曲紹介文を生成（description_ja を活用・llm.py / watcher.py 共通）"""
+    """曲情報から日本語の単曲紹介文を生成（description_ja を活用・llm.py / watcher.py 共通）"""
     t_title = (track_info.get("title") or "楽曲").strip()
     t_artist = (track_info.get("artist") or "").strip()
     desc = description or track_info.get("description") or track_info.get("description_ja") or ""
@@ -670,6 +670,234 @@ def build_japanese_track_announcement(
     if has_artist:
         return f"{prefix}『{t_title}』（{t_artist}）を再生します。"
     return f"{prefix}『{t_title}』を再生します。"
+
+
+def build_playlist_overview_announcement(
+    selected_tracks: list,
+    query: str = "",
+    first_track: dict | None = None,
+    language: str = "ja",
+) -> str:
+    """
+    選曲された曲群（プレイリスト）全体を俯瞰し、選曲概要＋1曲目紹介のナレーション文を生成
+    （日本語 VOICEVOX / 英語 DJ モード両対応、LLM動的生成＆テンプレートフォールバック）
+    """
+    if not selected_tracks:
+        if first_track:
+            return (
+                build_english_track_announcement(first_track)
+                if language == "en"
+                else build_japanese_track_announcement(first_track)
+            )
+        return "Now playing music." if language == "en" else "音楽を再生します。"
+
+    total_count = len(selected_tracks)
+    first_song = first_track or selected_tracks[0]
+
+    # 1. アーティスト一覧の抽出（重複排除、未設定除外）
+    artists_raw = []
+    for t in selected_tracks:
+        a = (t.get("artist") or "").strip()
+        if a and a not in ("アーティスト未設定", "Unknown", "unknown", "None", "none", ""):
+            if a not in artists_raw:
+                artists_raw.append(a)
+
+    # 2. ジャンル・ムードの抽出
+    genres_raw = []
+    moods_raw = []
+    for t in selected_tracks:
+        g = (t.get("genre") or "").strip()
+        if g and g not in ("その他", "None", ""):
+            for g_item in g.split(","):
+                g_clean = g_item.strip()
+                if g_clean and g_clean not in genres_raw:
+                    genres_raw.append(g_clean)
+        m = (t.get("mood") or "").strip()
+        if m:
+            for m_item in m.split(","):
+                m_clean = m_item.strip()
+                if m_clean and m_clean not in moods_raw:
+                    moods_raw.append(m_clean)
+
+    # 1曲目の情報
+    first_title = (first_song.get("title") or "楽曲").strip()
+    first_artist = (first_song.get("artist") or "").strip()
+    first_title_en = (first_song.get("title_en") or "").strip()
+    first_artist_en = (first_song.get("artist_en") or "").strip()
+    desc_ja = (first_song.get("description_ja") or first_song.get("description") or "").strip()
+    desc_en = (first_song.get("description_en") or "").strip()
+
+    # =========================================================================
+    # 言語別処理
+    # =========================================================================
+    if language == "en":
+        # 英語モード
+        if first_title_en and not RE_JAPANESE.search(first_title_en):
+            en_title = first_title_en
+        else:
+            en_title = to_roman_if_japanese(first_title_en or first_title)
+
+        if first_artist_en and not RE_JAPANESE.search(first_artist_en):
+            en_artist = first_artist_en
+        else:
+            en_artist = to_roman_if_japanese(first_artist_en or first_artist)
+
+        en_artists = [
+            (to_roman_if_japanese(a) if RE_JAPANESE.search(a) else a) for a in artists_raw[:3]
+        ]
+        if len(artists_raw) == 1:
+            artist_phrase = f"by {en_artists[0]}"
+        elif len(artists_raw) == 2:
+            artist_phrase = f"featuring {en_artists[0]} and {en_artists[1]}"
+        elif len(artists_raw) >= 3:
+            artist_phrase = f"featuring {en_artists[0]}, {en_artists[1]}, and more"
+        else:
+            artist_phrase = ""
+
+        theme_en = query.strip() if query else (genres_raw[0] if genres_raw else "music")
+        for ja_g, en_g in GENRE_JA_TO_EN.items():
+            if ja_g in theme_en:
+                theme_en = en_g
+                break
+
+        # 1. LLMによる英語DJトーク生成
+        if config.LLAMA_CPP_CHAT_URL:
+            try:
+                prompt = (
+                    f"You are a cool FM Radio DJ. "
+                    f"Write a smooth, natural 2-sentence opening radio announcement introducing the selected playlist and the first track. "
+                    f"Request/Theme: {theme_en}, Total Tracks: {total_count}, "
+                    f"Artists: {', '.join(en_artists) if en_artists else en_artist}, "
+                    f"First Track: '{en_title}' by {en_artist}, "
+                    f"First Track Info: {desc_en or desc_ja[:120]}. "
+                    f"Keep it under 35 words. Output ONLY the radio spoken line without quotes."
+                )
+                payload = {
+                    "model": config.LLM_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "temperature": 0.3,
+                    "max_tokens": 80,
+                }
+                res = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=6.0)
+                dj_line = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
+                dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
+                if dj_line and len(dj_line) > 15:
+                    print(f"🎙️ [English DJ 選曲俯瞰ナレーション (LLM)] '{dj_line}'", flush=True)
+                    return dj_line
+            except Exception:
+                pass
+
+        # 2. 英語テンプレートフォールバック
+        clean_en_desc = clean_english_text_for_speech(desc_en, max_chars=140) if desc_en else ""
+        if artist_phrase:
+            intro = f"I've lined up {total_count} great tracks {artist_phrase}."
+        elif theme_en:
+            intro = f"Here are {total_count} {theme_en} tracks for you."
+        else:
+            intro = f"I've selected {total_count} tracks for you."
+
+        kickoff = f"Let's get started with '{en_title}' by {en_artist}." if en_artist else f"Let's get started with '{en_title}'."
+        announcement = f"{intro} {kickoff}"
+        if clean_en_desc:
+            announcement += f" {clean_en_desc}"
+        print(f"🎙️ [English DJ 選曲俯瞰ナレーション (Template)] {announcement}", flush=True)
+        return announcement
+
+    else:
+        # 日本語モード
+        if len(artists_raw) == 1:
+            artist_phrase = f"{artists_raw[0]}のナンバー"
+        elif len(artists_raw) == 2:
+            artist_phrase = f"{artists_raw[0]}や{artists_raw[1]}"
+        elif len(artists_raw) >= 3:
+            artist_phrase = f"{artists_raw[0]}や{artists_raw[1]}をはじめとするアーティスト"
+        else:
+            artist_phrase = ""
+
+        theme_ja = query.strip() if query else (genres_raw[0] if genres_raw else "")
+        if theme_ja:
+            theme_phrase = f"「{theme_ja}」"
+        elif moods_raw:
+            theme_phrase = f"{moods_raw[0]}な雰囲気"
+        else:
+            theme_phrase = "おすすめの楽曲"
+
+        # 1. LLM (llama.cpp) による日本語選曲俯瞰トーク生成
+        if config.LLAMA_CPP_CHAT_URL:
+            try:
+                prompt = (
+                    f"あなたはFMラジオのパーソナリティ（DJ）です。"
+                    f"リスナーのリクエストに基づいて選曲されたプレイリストについて、選曲の全体像を俯瞰した自然で魅力的なオープニングコメント（選曲のテーマ・アーティスト・曲数）と、1曲目の紹介文を作成してください。\n"
+                    f"リクエスト/テーマ: {theme_ja or 'おすすめ'}\n"
+                    f"選曲数: 全{total_count}曲\n"
+                    f"主なアーティスト: {', '.join(artists_raw[:3]) if artists_raw else first_artist}\n"
+                    f"1曲目: 『{first_title}』{f'（{first_artist}）' if first_artist else ''}\n"
+                    f"1曲目の背景・解説: {desc_ja[:120]}\n"
+                    f"【条件】\n"
+                    f"- ラジオの曲紹介として自然な話し言葉で、2〜3文（80〜120文字程度）で出力してください。\n"
+                    f"- 余計な前置きやマークダウン、引用符は出力せず、発話するナレーション文のみを出力してください。"
+                )
+                payload = {
+                    "model": config.LLM_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "temperature": 0.4,
+                    "max_tokens": 128,
+                }
+                res = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=6.0)
+                dj_line = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
+                dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
+                if dj_line and len(dj_line) > 20:
+                    print(f"📖 [日本語 選曲俯瞰ナレーション (LLM)] '{dj_line}'", flush=True)
+                    return dj_line
+            except Exception:
+                pass
+
+        # 2. 日本語テンプレートフォールバック
+        clean_desc = clean_text_for_speech(desc_ja, max_chars=100) if desc_ja else ""
+        has_first_artist = first_artist and first_artist not in ("アーティスト未設定", "Unknown", "unknown")
+
+        if len(artists_raw) == 1:
+            # 単一アーティスト（例: ビートルズのみ）
+            artist_name = artists_raw[0]
+            if theme_ja and theme_ja.lower() not in artist_name.lower():
+                intro = f"「{theme_ja}」から、{artist_name}の楽曲全{total_count}曲をセレクトしました。"
+            else:
+                intro = f"{artist_name}の代表曲全{total_count}曲をセレクトしました。"
+            # 単一アーティストの場合は1曲目のアーティスト名を省略してスッキリ
+            track_part = f"まずは1曲目、『{first_title}』からお届けします。"
+        elif len(artists_raw) == 2:
+            # 2アーティスト
+            a1, a2 = artists_raw[0], artists_raw[1]
+            if theme_ja:
+                intro = f"「{theme_ja}」から、{a1}や{a2}などの名曲全{total_count}曲をセレクトしました。"
+            else:
+                intro = f"{a1}や{a2}などの楽曲全{total_count}曲をセレクトしました。"
+            track_part = f"まずは1曲目、『{first_title}』{f'（{first_artist}）' if has_first_artist else ''}からお届けします。"
+        elif len(artists_raw) >= 3:
+            # 3人以上
+            a1, a2 = artists_raw[0], artists_raw[1]
+            if theme_ja:
+                intro = f"「{theme_ja}」から、{a1}や{a2}をはじめとする名曲全{total_count}曲をセレクトしました。"
+            else:
+                intro = f"{a1}や{a2}をはじめとするアーティストの名曲全{total_count}曲をセレクトしました。"
+            track_part = f"まずは1曲目、『{first_title}』{f'（{first_artist}）' if has_first_artist else ''}からお届けします。"
+        else:
+            # アーティスト情報なし
+            if theme_ja:
+                intro = f"「{theme_ja}」に合わせた楽曲全{total_count}曲をセレクトしました。"
+            else:
+                intro = f"おすすめの楽曲全{total_count}曲をセレクトしました。"
+            track_part = f"まずは1曲目、『{first_title}』からお届けします。"
+
+        announcement = f"{intro} {track_part}"
+        if clean_desc:
+            announcement += f" {clean_desc}"
+        print(f"📖 [日本語 選曲俯瞰ナレーション (Template)] {announcement}", flush=True)
+        return announcement
 
 
 def speak_english(text: str):
