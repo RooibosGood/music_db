@@ -240,14 +240,13 @@ async def api_system_power(req: SystemPowerRequest):
     msg = f"⚡ Jetson Orin Nano Super を{action_label}します..."
 
     # チャット履歴とWebSocketに通知
-    msg_record = {
-        "sender": "assistant",
-        "text": f"⚠️ システムコマンドを受信しました。{action_label}を実行します。",
-        "source": "system",
-        "action": action,
-        "timestamp": time.strftime("%H:%M:%S"),
-    }
-    state.chat_history.append(msg_record)
+    msg_record = state.create_chat_message(
+        sender="assistant",
+        text=f"⚠️ システムコマンドを受信しました。{action_label}を実行します。",
+        source="system",
+        action=action,
+    )
+    state.append_chat_message(msg_record)
     broadcast_event({
         "type": "system_power",
         "action": action,

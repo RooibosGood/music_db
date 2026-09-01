@@ -2780,12 +2780,14 @@
       const text = chatInput.value.trim();
       if (!text) return;
 
+      const userMsgId = `user_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
       // Add user message locally
       appendMessage({
+        id: userMsgId,
         sender: 'user',
         text: text,
         source: 'chat',
-        timestamp: new Date().toLocaleTimeString()
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
       });
 
       chatInput.value = '';
@@ -2808,15 +2810,20 @@
         const data = await res.json();
         typingIndicator.style.display = 'none';
 
-        if (data.reply) {
+        // WebSocket未接続または未受信時のフォールバックとしてのみHTTPレスポンスからメッセージを描画
+        if (data.message) {
+          appendMessage(data.message);
+        } else if (data.reply) {
           appendMessage({
             sender: 'assistant',
             text: data.reply,
-            source: 'ai',
+            source: 'chat',
             action: data.action,
             query: data.query,
+            track_info: data.track_info,
+            description: data.description,
             tracks_added: data.tracks_added,
-            timestamp: new Date().toLocaleTimeString()
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
           });
         }
       } catch (err) {
@@ -2840,9 +2847,15 @@
     }
 
     const renderedMessageKeys = new Set();
+    let lastRenderedText = '';
+    let lastRenderedSender = '';
+    let lastRenderedTime = 0;
 
     function getMessageKey(msg) {
-      return `${msg.sender || ''}_${msg.timestamp || ''}_${(msg.text || '').substring(0, 30)}`;
+      if (!msg) return '';
+      if (msg.id) return `id_${msg.id}`;
+      const cleanText = (msg.text || '').trim().substring(0, 60);
+      return `${msg.sender || ''}_${msg.source || ''}_${cleanText}`;
     }
 
     function syncChatHistory(history) {
@@ -2851,10 +2864,28 @@
     }
 
     function appendMessage(msg) {
-      if (!msg) return;
+      if (!msg || !msg.text) return;
       const key = getMessageKey(msg);
       if (renderedMessageKeys.has(key)) return;
+
+      // 短時間内（2.5秒以内）の同一送信者・同一テキストの重複描画をブロック
+      const now = Date.now();
+      const cleanText = (msg.text || '').trim();
+      if (
+        cleanText === lastRenderedText &&
+        msg.sender === lastRenderedSender &&
+        (now - lastRenderedTime) < 2500
+      ) {
+        return;
+      }
+
       renderedMessageKeys.add(key);
+      if (msg.id) {
+        renderedMessageKeys.add(`id_${msg.id}`);
+      }
+      lastRenderedText = cleanText;
+      lastRenderedSender = msg.sender;
+      lastRenderedTime = now;
 
       // 初回挨拶の静的プレースホルダーがあれば削除
       const initGreeting = document.getElementById('initialGreetingMsg');

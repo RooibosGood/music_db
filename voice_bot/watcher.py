@@ -29,14 +29,13 @@ def play_startup_greeting():
                 full_greeting = base_greeting
 
             print(f"🎙️ [Greeting] 起動案内 (English): '{full_greeting}'", flush=True)
-            msg_record = {
-                "sender": "assistant",
-                "text": full_greeting,
-                "source": "system",
-                "action": "greeting",
-                "timestamp": time.strftime("%H:%M:%S"),
-            }
-            state.chat_history.append(msg_record)
+            msg_record = state.create_chat_message(
+                sender="assistant",
+                text=full_greeting,
+                source="system",
+                action="greeting",
+            )
+            state.append_chat_message(msg_record)
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             broadcast_process_status("tts", "🎙️ Speaking startup greeting...")
@@ -54,14 +53,13 @@ def play_startup_greeting():
                 full_greeting = base_greeting
 
             print(f"🎙️ [Greeting] 起動案内 (Japanese): '{full_greeting}'", flush=True)
-            msg_record = {
-                "sender": "assistant",
-                "text": full_greeting,
-                "source": "system",
-                "action": "greeting",
-                "timestamp": time.strftime("%H:%M:%S"),
-            }
-            state.chat_history.append(msg_record)
+            msg_record = state.create_chat_message(
+                sender="assistant",
+                text=full_greeting,
+                source="system",
+                action="greeting",
+            )
+            state.append_chat_message(msg_record)
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             broadcast_process_status("tts", "🎙️ 起動案内を発話中...")
@@ -80,14 +78,13 @@ def announce_playback_finished():
                 "Say 'Hey Master' to request a song, or use the web chat below to make a request."
             )
             print(f"🎙️ [Watcher 再生終了案内 (English)] {announce_text}", flush=True)
-            msg_record = {
-                "sender": "assistant",
-                "text": announce_text,
-                "source": "auto_announcer",
-                "action": "playback_finished",
-                "timestamp": time.strftime("%H:%M:%S"),
-            }
-            state.chat_history.append(msg_record)
+            msg_record = state.create_chat_message(
+                sender="assistant",
+                text=announce_text,
+                source="auto_announcer",
+                action="playback_finished",
+            )
+            state.append_chat_message(msg_record)
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             broadcast_process_status("tts", "🎙️ Speaking playback finished announcement...")
@@ -99,14 +96,13 @@ def announce_playback_finished():
                 "マイクに向かってリクエストするか、下のチャット欄からお知らせください。"
             )
             print(f"📖 [Watcher 再生終了案内 (Japanese)] {announce_text}", flush=True)
-            msg_record = {
-                "sender": "assistant",
-                "text": announce_text,
-                "source": "auto_announcer",
-                "action": "playback_finished",
-                "timestamp": time.strftime("%H:%M:%S"),
-            }
-            state.chat_history.append(msg_record)
+            msg_record = state.create_chat_message(
+                sender="assistant",
+                text=announce_text,
+                source="auto_announcer",
+                action="playback_finished",
+            )
+            state.append_chat_message(msg_record)
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             broadcast_process_status("tts", "🎙️ 再生完了案内を発話中...")
@@ -210,16 +206,15 @@ def run_track_watcher_loop():
                 print(f"📖 [Watcher 自動曲紹介] {announce_text}", flush=True)
 
             # チャット履歴・Web UI にもプッシュ
-            msg_record = {
-                "sender": "assistant",
-                "text": announce_text,
-                "source": "auto_announcer",
-                "action": "track_transition",
-                "track_info": song,
-                "description": description,
-                "timestamp": time.strftime("%H:%M:%S"),
-            }
-            state.chat_history.append(msg_record)
+            msg_record = state.create_chat_message(
+                sender="assistant",
+                text=announce_text,
+                source="auto_announcer",
+                action="track_transition",
+                track_info=song,
+                description=description,
+            )
+            state.append_chat_message(msg_record)
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             # 3. 発話を実行（排他ロックで安全に発話）

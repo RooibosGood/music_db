@@ -242,14 +242,16 @@ def run_voice_loop():
                 print(f"👤 [Voice Input] ユーザー発言: {user_text}", flush=True)
                 state.voice_state["last_text"] = user_text
 
+                user_msg = state.create_chat_message(
+                    sender="user",
+                    text=user_text,
+                    source="voice",
+                )
+                state.append_chat_message(user_msg)
+
                 broadcast_event({
                     "type": "chat_message",
-                    "message": {
-                        "sender": "user",
-                        "text": user_text,
-                        "source": "voice",
-                        "timestamp": time.strftime("%H:%M:%S"),
-                    },
+                    "message": user_msg,
                 })
 
                 process_user_message(user_text, source="voice", speak_voice=True)

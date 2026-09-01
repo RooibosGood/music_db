@@ -232,18 +232,17 @@ def process_user_message(
             broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
 
     # 5. 履歴に追加
-    msg_record = {
-        "sender": "assistant",
-        "text": reply_text,
-        "source": source,
-        "action": cmd.get("action"),
-        "query": cmd.get("query"),
-        "track_info": track_info,
-        "description": description,
-        "tracks_added": control_res.get("tracks_added", []),
-        "timestamp": time.strftime("%H:%M:%S"),
-    }
-    state.chat_history.append(msg_record)
+    msg_record = state.create_chat_message(
+        sender="assistant",
+        text=reply_text,
+        source=source,
+        action=cmd.get("action"),
+        query=cmd.get("query"),
+        track_info=track_info,
+        description=description,
+        tracks_added=control_res.get("tracks_added", []),
+    )
+    state.append_chat_message(msg_record)
 
     # 6. 全 WebSocket クライアントにブロードキャスト
     broadcast_event({
@@ -262,4 +261,5 @@ def process_user_message(
         "track_info": track_info,
         "tracks_added": control_res.get("tracks_added", []),
         "control_success": control_res.get("success", False),
+        "message": msg_record,
     }

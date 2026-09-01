@@ -150,7 +150,7 @@ Audio_SQL/
 | **`voice_bot_config.json`** | システム全体の設定ファイル。デモモード、moOde IP・ポート、LLMモデル、アナウンス言語、オーディオデバイス、滋賀県栗東市等の天気設定、Webサーバー設定を管理。 |
 | **`voice_bot/config.py`** | `load_config_from_file()` による `voice_bot_config.json` の自動パース・反映、`save_config_to_file()` による設定保存・永続化、および `get_current_settings()`。 |
 | **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、および llama.cpp LLM を用いた起動時デイリーナレーションの自動生成・フォールバック合成。 |
-| **`voice_bot/state.py`** | `chat_history`, `active_websockets`, `voice_state`, `current_processing_state` の定義および同一曲判定ヘルパー `is_same_track()`。 |
+| **`voice_bot/state.py`** | `chat_history`, `active_websockets`, `voice_state`, `current_processing_state` の定義、一意ID生成・重複排除 (`create_chat_message()`, `append_chat_message()`)、および同一曲判定ヘルパー `is_same_track()`。 |
 | **`voice_bot/broadcaster.py`** | `broadcast_event()`, `broadcast_process_status()`, `broadcast_status()` による WebSocket 全体へのリアルタイムプッシュ通信。 |
 | **`voice_bot/llm.py`** | `http_post_json()`, `parse_intent_with_llm()` による LLM 意図解析、および `process_user_message()` による音声・チャット共通処理エンジン。 |
 | **`voice_bot/watcher.py`** | `run_track_watcher_loop()` による moOde 再生曲変更の常時監視と自動曲紹介発話、`play_startup_greeting()` による起動アナウンス（基本案内＋デイリーインフォメーション統合）。 |
@@ -531,6 +531,7 @@ ProcessCommand --> Idle : 処理実行・返答
 ### 7.1 プッシュイベント一覧
 1. **状態更新イベント (`status_update`)**: 接続時および再生状態・音声状態変化時に自動送信。
 2. **チャットメッセージ受信イベント (`chat_message`)**: 音声または Web からメッセージが送受信された際にリアルタイム配信。
+   - すべてのメッセージには一意なメッセージID (`id`) が付与され、フロントエンドおよびバックエンドの双方向で重複受信・二重表示を確実に排除する仕組みを備えています。
 3. **音声認識ステータスイベント (`voice_event`)**: マイクのリッスン状態 (`"idle"`, `"listening"`, `"recognizing"`) を通知。
 4. **リアルタイム処理ステータスイベント (`process_status`)**: 現在実行中のフェーズ（`"idle"`, `"stt"`, `"llm"`, `"db"`, `"moode"`, `"tts"`, `"playing"`）を配信。
 
