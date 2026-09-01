@@ -57,7 +57,7 @@ NAS（UNC パス `\\homenas\music` やネットワークドライブ `Z:\` 等�
    ```
 3. **rsgain.exe**（ReplayGain 2.0 スキャン・タギングCLIツール）:
    - [rsgain Releases (GitHub)](https://github.com/complexlogic/rsgain/releases) より Windows 64-bit 版をダウンロード。
-   - 解凍した `rsgain.exe` を本スクリプトと同じディレクトリ、または `tools/` ディレクトリ、または PATH の通った場所に配置してください。
+   - `rsgain-3.7-win64` ディレクトリ（またはスクリプトと同じディレクトリ、`tools/`、PATH上のいずれか）に配置すると自動認識されます。
    - ※ `--check`（タグ確認）および `--remove-tags`（タグ削除）は、`rsgain` がなくても Python (mutagen) 単体で動作します。
 
 ---
@@ -69,6 +69,8 @@ NAS（UNC パス `\\homenas\music` やネットワークドライブ `Z:\` 等�
 | オプション | 短縮形 | デフォルト値 | 説明 |
 | :--- | :--- | :--- | :--- |
 | `--dir <PATH>` | `-d` | `\\homenas\music` | 対象の音楽ライブラリディレクトリ（UNCパスまたはドライブ文字） |
+| `--limit <N>` | `-l` | `3` | 処理する未処理アルバムフォルダ数の上限（`0` を指定すると無制限） |
+| `--limit-files <N>` | - | `0` | 処理する未処理楽曲ファイル数の上限（`0` を指定すると無制限） |
 | `--workers <N>` | `-w` | `2` | 並列処理プロセス数（NAS負荷を考慮し 2〜4 推奨） |
 | `--force` | `-f` | `False` | 既存タグが存在する場合でも強制的に再計算・上書き |
 | `--check` | `--scan` | `False` | ライブラリ内の ReplayGain タグ付加状況をスキャン・集計表示（変更なし） |

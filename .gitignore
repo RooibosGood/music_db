@@ -11,4 +11,5 @@ music_meta.db*
 .env
 .DS_Store
 scratch/
+rsgain*/
 

@@ -315,19 +315,25 @@ http://<Jetson-IPアドレス>:8000
 ### 主なコマンド
 
 ```bash
-# 1. NASの音楽ライブラリを標準設定でスキャン・新規タグ付加
-python apply_replaygain_win.py
+# 1. 動作確認テスト（未処理の最初の3アルバムフォルダを処理）
+python apply_replaygain_win.py --limit 3
 
-# 2. ネットワークドライブ Z:\Music を指定して実行
+# 2. 未処理楽曲を曲数指定でテスト（約10曲分処理）
+python apply_replaygain_win.py --limit-files 10
+
+# 3. NASの音楽ライブラリ全体を差分スキャン・全件タグ付加（実行済みは自動スキップ）
+python apply_replaygain_win.py --limit 0
+
+# 4. ネットワークドライブ Z:\Music を指定して実行
 python apply_replaygain_win.py --dir "Z:\Music"
 
-# 3. 既存タグの付加状況を確認・スキャン（変更なし）
+# 5. 既存タグの付加状況を確認・スキャン（変更なし）
 python apply_replaygain_win.py --check
 
-# 4. 【原状復帰】全音源から ReplayGain タグを完全消去
+# 6. 【原状復帰】全音源から ReplayGain タグを完全消去
 python apply_replaygain_win.py --remove-tags
 
-# 5. 書き込みを行わずにシミュレーション
-python apply_replaygain_win.py --dry-run
+# 7. 書き込みを行わずにシミュレーション
+python apply_replaygain_win.py --limit 3 --dry-run
 ```
 

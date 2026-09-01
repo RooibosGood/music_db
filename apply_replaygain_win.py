@@ -8,6 +8,8 @@ Windows / NAS環境向け 非破壊 ReplayGain (EBU R128) 一括タグ付加・�
 - メタデータタグ領域（FLAC: Vorbis Comment, MP3: ID3v2 TXXX, M4A: iTunes Tags 等）にのみ
   音量調整指示値 (Track Gain / Album Gain [dB]) をテキストとして書き込みます。
 - 完全な非破壊処理のため、いつでもタグを削除（--remove-tags）すれば元の状態に戻せます。
+- 実行済みの音源・フォルダは自動的にスキップされ、未処理のフォルダのみを対象にできます。
+- --limit で処理するフォルダ数やファイル数を指定してテスト実行が可能です。
 - NAS (UNCパス \\homenas\\music やネットワークドライブ Z:\\ 等) への接続と負荷を考慮した設計です。
 """
 
@@ -71,18 +73,28 @@ def find_rsgain_binary(custom_path: str | None = None) -> str | None:
         elif p.is_dir() and (p / "rsgain.exe").is_file():
             return str((p / "rsgain.exe").resolve())
 
-    # 1. カレントディレクトリ or スクリプト階層
-    script_dir = Path(__file__).parent
-    candidates = [
+    script_dir = Path(__file__).parent.resolve()
+    current_dir = Path.cwd().resolve()
+
+    # 1. カレントディレクトリ or スクリプト階層の直下・サブフォルダ
+    fixed_candidates = [
         script_dir / "rsgain.exe",
         script_dir / "tools" / "rsgain.exe",
         script_dir / "bin" / "rsgain.exe",
-        Path("rsgain.exe"),
-        Path("tools/rsgain.exe"),
+        current_dir / "rsgain.exe",
+        current_dir / "tools" / "rsgain.exe",
     ]
-    for cand in candidates:
+    for cand in fixed_candidates:
         if cand.is_file():
-            return str(cand.resolve())
+            return str(cand)
+
+    # 1-2. rsgain-*-win64 / rsgain-* ディレクトリ内の検索
+    for base in [script_dir, current_dir]:
+        for d in sorted(base.glob("rsgain*"), reverse=True):
+            if d.is_dir():
+                cand = d / "rsgain.exe"
+                if cand.is_file():
+                    return str(cand)
 
     # 2. PATH環境変数
     which_path = shutil.which("rsgain") or shutil.which("rsgain.exe")
@@ -107,7 +119,7 @@ def find_rsgain_binary(custom_path: str | None = None) -> str | None:
 def get_replaygain_info(file_path: Path) -> dict[str, str]:
     """
     ファイルから ReplayGain 関連のメタデータタグを取得
-    戻り値: {'track_gain': '-6.20 dB', 'album_gain': '-5.10 dB', ...}
+    戻り値: {'replaygain_track_gain': '-6.20 dB', 'replaygain_album_gain': '-5.10 dB', ...}
     """
     info = {}
     ext = file_path.suffix.lower()
@@ -270,7 +282,7 @@ def process_album_folder(
     if not audio_files:
         return (str(folder_path), "NO_AUDIO", 0)
 
-    # 既存タグの確認
+    # 既存タグの確認（全曲タグ付きの場合はスキップ）
     if not force:
         untagged_files = [f for f in audio_files if not is_already_tagged(f)]
         if not untagged_files:
@@ -298,7 +310,7 @@ def process_album_folder(
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-            res = subprocess.run(
+            subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
@@ -343,7 +355,7 @@ def process_album_clean_folder(folder_path: Path, dry_run: bool = False) -> tupl
     for f in audio_files:
         if is_already_tagged(f):
             if not dry_run:
-                ok, msg = remove_replaygain_tags(f)
+                ok, _ = remove_replaygain_tags(f)
                 if ok:
                     removed_count += 1
             else:
@@ -393,29 +405,47 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 【使用例】
-  # 1. NASの音楽ライブラリを標準設定でスキャン・新規タグ付加
-  python apply_replaygain_win.py
+  # 1. 動作確認テスト（未処理の最初の3アルバムフォルダを処理）
+  python apply_replaygain_win.py --limit 3
 
-  # 2. ネットワークドライブ Z:\\Music を指定して実行
+  # 2. 曲数を指定してテスト（未処理の楽曲を約10曲分処理）
+  python apply_replaygain_win.py --limit-files 10
+
+  # 3. NASの音楽ライブラリ全体を差分スキャン（実行済みは自動スキップ）
+  python apply_replaygain_win.py --limit 0
+
+  # 4. ネットワークドライブ Z:\\Music を指定して実行
   python apply_replaygain_win.py --dir "Z:\\Music"
 
-  # 3. 既存タグがあっても強制再計算・上書き (--force)
-  python apply_replaygain_win.py --force
+  # 5. 既存タグがあっても強制再計算・上書き (--force)
+  python apply_replaygain_win.py --force --limit 5
 
-  # 4. タグ付加状況の確認・スキャンのみ実行 (--check)
+  # 6. タグ付加状況の確認・スキャンのみ実行 (--check)
   python apply_replaygain_win.py --check
 
-  # 5. 全音源から ReplayGain タグを完全消去して元の状態に戻す (--remove-tags)
+  # 7. 全音源から ReplayGain タグを完全消去して元の状態に戻す (--remove-tags)
   python apply_replaygain_win.py --remove-tags
 
-  # 6. 書き込みを行わずにシミュレーション (--dry-run)
-  python apply_replaygain_win.py --dry-run
+  # 8. 書き込みを行わずにシミュレーション (--dry-run)
+  python apply_replaygain_win.py --limit 5 --dry-run
         """
     )
     parser.add_argument(
         "--dir", "-d",
         default=os.environ.get("MUSIC_DIR", DEFAULT_MUSIC_DIR),
         help=f"対象の音楽ディレクトリ（UNCパスまたはドライブ文字）。デフォルト: {DEFAULT_MUSIC_DIR}"
+    )
+    parser.add_argument(
+        "--limit", "-l",
+        type=int,
+        default=3,
+        help="処理する未処理アルバムフォルダ数の上限（0を指定すると無制限）。デフォルト: 3"
+    )
+    parser.add_argument(
+        "--limit-files",
+        type=int,
+        default=0,
+        help="処理する未処理楽曲ファイル数の上限（0を指定すると無制限）。デフォルト: 0"
     )
     parser.add_argument(
         "--workers", "-w",
@@ -476,6 +506,10 @@ def main():
     print("==================================================")
     print(f"対象ディレクトリ : {root}")
     print(f"並列プロセス数   : {args.workers}")
+    if args.limit > 0:
+        print(f"処理上限フォルダ : 最大 {args.limit} フォルダ")
+    if args.limit_files > 0:
+        print(f"処理上限ファイル : 最大 {args.limit_files} 曲")
     if args.dry_run:
         print("実行モード       : ⚠️ DRY-RUN (シミュレーション / 変更は書き込まれません)")
 
@@ -508,15 +542,15 @@ def main():
 
     # 3. 音楽フォルダの探索
     print("\nライブラリを探索中...")
-    album_folders = []
+    all_album_folders = []
     for current_dir, _, files in os.walk(root):
         if any(Path(f).suffix.lower() in SUPPORTED_EXTENSIONS for f in files):
-            album_folders.append(Path(current_dir))
+            all_album_folders.append(Path(current_dir))
 
-    total_folders = len(album_folders)
-    print(f"検出アルバム/楽曲フォルダ数: {total_folders}\n")
+    total_discovered = len(all_album_folders)
+    print(f"検出アルバム/楽曲フォルダ数: {total_discovered}\n")
 
-    if total_folders == 0:
+    if total_discovered == 0:
         print("対象となる音声ファイルが見つかりませんでした。")
         return
 
@@ -531,7 +565,12 @@ def main():
         partial_tagged_folders = 0
         untagged_folders = 0
 
-        for i, folder in enumerate(album_folders, 1):
+        target_folders = all_album_folders
+        if args.limit > 0:
+            target_folders = target_folders[:args.limit]
+            print(f"（--limit {args.limit} により先頭 {len(target_folders)} フォルダのみスキャン）\n")
+
+        for i, folder in enumerate(target_folders, 1):
             info = scan_folder_tags_summary(folder)
             t = info.get("total", 0)
             tag_cnt = info.get("tagged", 0)
@@ -557,14 +596,14 @@ def main():
                 if tg or ag:
                     sample_desc = f" [例: Track {tg}, Album {ag}]"
 
-            print(f"[{i}/{total_folders}] [{status_str}] {folder}{sample_desc}")
+            print(f"[{i}/{len(target_folders)}] [{status_str}] {folder}{sample_desc}")
 
         print("\n=== スキャン結果サマリー ===")
-        print(f"総フォルダ数       : {total_folders}")
+        print(f"スキャンフォルダ数 : {len(target_folders)}")
         print(f"  - 全曲タグ付与済 : {fully_tagged_folders} フォルダ")
         print(f"  - 一部タグ付与   : {partial_tagged_folders} フォルダ")
         print(f"  - 未付与         : {untagged_folders} フォルダ")
-        print(f"総楽曲数           : {total_tracks} 曲")
+        print(f"スキャン楽曲数     : {total_tracks} 曲")
         print(f"  - タグ付与済楽曲 : {total_tagged_tracks} 曲 ({(total_tagged_tracks/total_tracks*100 if total_tracks else 0):.1f}%)")
         return
 
@@ -575,6 +614,11 @@ def main():
         print("=== 【原状復帰】ReplayGain タグ一括削除処理 ===")
         print("※ 音声データは一切変更されず、メタデータ内の ReplayGain 指示値のみを削除します。\n")
 
+        target_folders = all_album_folders
+        if args.limit > 0:
+            target_folders = target_folders[:args.limit]
+            print(f"（--limit {args.limit} により先頭 {len(target_folders)} フォルダを処理対象とします）\n")
+
         cleaned_folders = 0
         skipped_folders = 0
         total_cleaned_tracks = 0
@@ -583,7 +627,7 @@ def main():
         with ProcessPoolExecutor(max_workers=args.workers) as executor:
             futures = {
                 executor.submit(process_album_clean_folder, folder, args.dry_run): folder
-                for folder in album_folders
+                for folder in target_folders
             }
 
             for i, future in enumerate(as_completed(futures), 1):
@@ -592,12 +636,12 @@ def main():
                     cleaned_folders += 1
                     total_cleaned_tracks += removed_cnt
                     prefix = "[DRY-RUN 削除対象]" if args.dry_run else "[タグ削除完了]"
-                    print(f"[{i}/{total_folders}] {prefix} ({removed_cnt}/{tot}曲) {folder_str}")
+                    print(f"[{i}/{len(target_folders)}] {prefix} ({removed_cnt}/{tot}曲) {folder_str}")
                 elif status == "NO_TAGS_FOUND":
                     skipped_folders += 1
                 else:
                     error_folders += 1
-                    print(f"[{i}/{total_folders}] [{status}] {folder_str}")
+                    print(f"[{i}/{len(target_folders)}] [{status}] {folder_str}")
 
         print("\n=== タグ削除サマリー ===")
         print(f"タグ削除実施フォルダ : {cleaned_folders} フォルダ")
@@ -608,17 +652,68 @@ def main():
         return
 
     # ----------------------------------------------------
-    # モードC: ReplayGain 計算・タグ付加処理
+    # モードC: ReplayGain 計算・タグ付加処理（実行済みスキップ & 件数制限対応）
     # ----------------------------------------------------
     print("=== ReplayGain (EBU R128) バッチ書き込み開始 ===")
     album_mode = not args.track_only
     print(f"計算モード       : {'アルバム＆トラックゲイン' if album_mode else 'トラックゲインのみ'}")
     print(f"既存タグスキップ : {'無効 (強制上書き)' if args.force else '有効 (付加済はスキップ)'}\n")
 
+    # 実行済みスキップの判定と処理対象キューの構築
+    target_queue = []
+    already_tagged_folders = 0
+    already_tagged_tracks = 0
+    queued_tracks = 0
+
+    print("ライブラリのタグ付加状況を確認中...")
+    for folder in all_album_folders:
+        try:
+            audio_files = [
+                f for f in folder.iterdir()
+                if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+            ]
+        except Exception:
+            continue
+
+        if not audio_files:
+            continue
+
+        # 既存タグのチェック
+        if not args.force:
+            untagged_files = [f for f in audio_files if not is_already_tagged(f)]
+            if not untagged_files:
+                # 全曲タグ付与済み
+                already_tagged_folders += 1
+                already_tagged_tracks += len(audio_files)
+                continue
+
+        target_queue.append((folder, len(audio_files)))
+        queued_tracks += len(audio_files)
+
+        # --limit-files 指定時の上限チェック
+        if args.limit_files > 0 and queued_tracks >= args.limit_files:
+            break
+
+        # --limit 指定時の上限チェック（0より大きい場合）
+        if args.limit > 0 and len(target_queue) >= args.limit:
+            break
+
+    print(f"・実行済み（スキップ）: {already_tagged_folders} フォルダ ({already_tagged_tracks} 曲)")
+    print(f"・今回処理対象        : {len(target_queue)} フォルダ ({queued_tracks} 曲)")
+    if args.limit > 0 and len(target_queue) == args.limit:
+        print(f"  ※ --limit {args.limit} に達したためここで処理を開始します（全件処理は --limit 0）")
+    elif args.limit_files > 0 and queued_tracks >= args.limit_files:
+        print(f"  ※ --limit-files {args.limit_files} に達したためここで処理を開始します")
+    print()
+
+    if not target_queue:
+        print("処理対象となる未処理のフォルダはありませんでした（すべてタグ付加済みです）。")
+        return
+
     success_count = 0
-    skipped_count = 0
     error_count = 0
     processed_tracks = 0
+    total_target = len(target_queue)
 
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = {
@@ -630,7 +725,7 @@ def main():
                 album_mode,
                 args.dry_run
             ): folder
-            for folder in album_folders
+            for folder, _ in target_queue
         }
 
         for i, future in enumerate(as_completed(futures), 1):
@@ -638,21 +733,23 @@ def main():
             if status == "SUCCESS":
                 success_count += 1
                 processed_tracks += track_cnt
-                print(f"[{i}/{total_folders}] [タグ付加完了] ({track_cnt}曲) {folder_str}")
+                print(f"[{i}/{total_target}] [タグ付加完了] ({track_cnt}曲) {folder_str}")
             elif status == "DRY_RUN_READY":
                 success_count += 1
                 processed_tracks += track_cnt
-                print(f"[{i}/{total_folders}] [DRY-RUN 対象] ({track_cnt}曲) {folder_str}")
+                print(f"[{i}/{total_target}] [DRY-RUN 対象] ({track_cnt}曲) {folder_str}")
             elif status == "SKIPPED_ALREADY_TAGGED":
-                skipped_count += 1
+                # 事前チェック後に追加でスキップされた場合
+                print(f"[{i}/{total_target}] [スキップ (済)] ({track_cnt}曲) {folder_str}")
             elif status != "NO_AUDIO":
                 error_count += 1
-                print(f"[{i}/{total_folders}] [{status}] {folder_str}")
+                print(f"[{i}/{total_target}] [{status}] {folder_str}")
 
     print("\n=== 処理完了サマリー ===")
-    print(f"タグ付加完了 (対象) : {success_count} フォルダ ({processed_tracks} 曲)")
-    print(f"スキップ (付加済)   : {skipped_count} フォルダ")
-    print(f"エラー発生          : {error_count} フォルダ")
+    print(f"タグ新規付加完了 : {success_count} フォルダ ({processed_tracks} 曲)")
+    print(f"スキップ（実行済）: {already_tagged_folders} フォルダ ({already_tagged_tracks} 曲)")
+    if error_count > 0:
+        print(f"エラー発生       : {error_count} フォルダ")
 
 
 if __name__ == "__main__":
