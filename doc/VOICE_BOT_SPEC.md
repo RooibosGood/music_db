@@ -416,10 +416,10 @@ ProcessCommand --> Idle : 処理実行・返答
   - 指定された数値に設定（1〜5の範囲にクランプ）。
 
 #### 2. 音源ファイル本体タグへの書き込み仕様 (`tagger.py`)
-- **パス探索・解決 (`resolve_audio_file_path`)**: Windows/NAS パス (`\\homenas\music\...`) および Linux/Jetson マウントパス (`/mnt/nas/music/...`, `/var/lib/mpd/music/...` 等) を自動探索。
-- **フォーマット別タグ仕様**:
-  - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` に `"1"`〜`"5"` を保存。
-  - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter) フレーム（★1:1, ★2:64, ★3:128, ★4:196, ★5:255）および `TXXX:RATING` (`"1"`〜`"5"`) を同時保存。
+- **パス探索・解決 (`resolve_audio_file_path`)**: `config.MUSIC_DIR`、Windows/NAS パス (`\\homenas\music\...`) および Linux/Jetson マウントパス (`/mnt/nas_music`, `/mnt/nas/music`, `/var/lib/mpd/music/NAS` 等) を自動探索。moOde の `NAS/` プレフィックスも自動除去して照合。
+- **フォーマット別タグ仕様 (Windows / moOde / foobar2000 最大互換)**:
+  - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` に `"20"`, `"40"`, `"60"`, `"80"`, `"100"`（★1〜5: Windows/foobar2000標準）を保存。さらに `RATING_5` (`"1"`〜`"5"`), `RATING_PERCENT`, `RATING:no@email` を同時付与。
+  - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter: 1, 64, 128, 196, 255) ＋ `TXXX:RATING` (`"60"`, `"80"`, `"100"`) ＋ `TXXX:Rating WMP` (`"1"`〜`"5"`) を同時保存。
   - **M4A / AAC / ALAC**: MP4 atom `----:com.apple.iTunes:RATING` / `rate` に `20, 40, 60, 80, 100` を保存。
 
 #### 3. 音声・チャット連携

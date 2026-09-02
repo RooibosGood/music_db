@@ -15,6 +15,7 @@ DEMO_MODE: bool = False  # moOde実機なしで選曲・再生・解説・ステ
 MOODE_IP: str = "192.168.68.198"  # moOde (Raspberry Pi 5) の IP アドレス
 MOODE_PORT: int = 6600
 PLAY_DELAY_SEC: float = 3.0  # 曲選択から再生開始までの待機時間（ReplayGainタグ反映待ち）
+MUSIC_DIR: Optional[str] = None  # NAS/音源ディレクトリのローカルマウント先（例: "/mnt/nas_music", "/mnt/nas/music", "\\\\homenas\\music"）
 
 # ==================== 音声合成 / LLM 設定 ====================
 VOICEVOX_URL: str = "http://localhost:50021"
@@ -68,7 +69,7 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
     import json
     import os
 
-    global DEMO_MODE, MOODE_IP, MOODE_PORT, PLAY_DELAY_SEC, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
+    global DEMO_MODE, MOODE_IP, MOODE_PORT, PLAY_DELAY_SEC, MUSIC_DIR, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
     global ANNOUNCE_LANGUAGE, ENGLISH_VOICE, AUDIO_OUTPUT_NAME, AUDIO_OUTPUT_DEV
     global VOICE_PRE_SILENCE_SEC, INPUT_DEVICE_NAME, INPUT_DEVICE_INDEX
     global ENABLE_DAILY_INFO, WEATHER_CITY, WEATHER_CITY_JA, WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_TIMEZONE
@@ -103,7 +104,12 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
         if "demo_mode" in data:
             DEMO_MODE = bool(data["demo_mode"])
 
-        # moOde 設定
+        # moOde / 音楽ディレクトリ設定
+        if "music_dir" in data:
+            MUSIC_DIR = str(data["music_dir"])
+        elif "MUSIC_DIR" in os.environ:
+            MUSIC_DIR = os.environ["MUSIC_DIR"]
+
         moode_cfg = data.get("moode", {})
         if "demo_mode" in moode_cfg:
             DEMO_MODE = bool(moode_cfg["demo_mode"])
@@ -115,6 +121,8 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
             PLAY_DELAY_SEC = float(moode_cfg["play_delay_sec"])
         elif "play_delay_sec" in data:
             PLAY_DELAY_SEC = float(data["play_delay_sec"])
+        if "music_dir" in moode_cfg:
+            MUSIC_DIR = str(moode_cfg["music_dir"])
 
         # LLM 設定
         llm_cfg = data.get("llm", {})
@@ -190,6 +198,7 @@ def get_current_settings() -> dict:
             "ip": MOODE_IP,
             "port": MOODE_PORT,
             "play_delay_sec": PLAY_DELAY_SEC,
+            "music_dir": MUSIC_DIR,
         },
         "announcement": {
             "language": ANNOUNCE_LANGUAGE,
@@ -229,7 +238,7 @@ def save_config_to_file(updates: dict) -> bool:
     import json
     import os
 
-    global DEMO_MODE, MOODE_IP, MOODE_PORT, PLAY_DELAY_SEC, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
+    global DEMO_MODE, MOODE_IP, MOODE_PORT, PLAY_DELAY_SEC, MUSIC_DIR, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
     global ANNOUNCE_LANGUAGE, ENGLISH_VOICE, AUDIO_OUTPUT_NAME, AUDIO_OUTPUT_DEV
     global VOICE_PRE_SILENCE_SEC, INPUT_DEVICE_NAME, INPUT_DEVICE_INDEX
     global ENABLE_DAILY_INFO, WEATHER_CITY, WEATHER_CITY_JA, WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_TIMEZONE
@@ -254,6 +263,11 @@ def save_config_to_file(updates: dict) -> bool:
         DEMO_MODE = val
         data["demo_mode"] = val
 
+    # 音楽ディレクトリ
+    if "music_dir" in updates:
+        MUSIC_DIR = str(updates["music_dir"]) if updates["music_dir"] else None
+        data["music_dir"] = MUSIC_DIR
+
     # moOde
     if "moode" in updates:
         moode_cfg = data.setdefault("moode", {})
@@ -266,6 +280,9 @@ def save_config_to_file(updates: dict) -> bool:
         if "play_delay_sec" in updates["moode"]:
             PLAY_DELAY_SEC = float(updates["moode"]["play_delay_sec"])
             moode_cfg["play_delay_sec"] = PLAY_DELAY_SEC
+        if "music_dir" in updates["moode"]:
+            MUSIC_DIR = str(updates["moode"]["music_dir"]) if updates["moode"]["music_dir"] else None
+            moode_cfg["music_dir"] = MUSIC_DIR
         if "demo_mode" in updates["moode"]:
             DEMO_MODE = bool(updates["moode"]["demo_mode"])
             data["demo_mode"] = DEMO_MODE

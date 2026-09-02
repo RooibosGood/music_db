@@ -2,10 +2,13 @@
 
 mutagen を用いて、FLAC / MP3 / M4A / AAC / OGG / WAV / AIFF / DSF 等の各種音源ファイルの
 メタデータ欄（Vorbis Comment, ID3 POPM/TXXX, MP4 atoms）にレーティング（★1〜5）を直接読み書きします。
+Windows エクスプローラー、foobar2000、Mp3tag、moOde、MusicBee との最大互換性を確保しています。
 """
 import os
 import re
 from typing import Any, Dict, List, Optional
+
+from . import config
 
 try:
     import mutagen
@@ -28,20 +31,39 @@ except ImportError:
 
 # Jetson (Linux) / Windows で想定される音楽ディレクトリのプレフィックス候補
 SEARCH_BASE_DIRS: List[str] = [
-    # Windows
-    r"\\homenas\music",
-    r"\\homenas\homenas_music",
-    r"D:\music",
-    r"E:\music",
-    # Linux / Jetson / moOde
+    # Linux / Jetson / moOde マウント先
+    "/mnt/nas_music",
     "/mnt/nas/music",
     "/mnt/music",
     "/var/lib/mpd/music/NAS",
     "/var/lib/mpd/music",
     "/mnt/homenas_music",
+    "/mnt/homenas/music",
+    "/mnt/nas",
     "/media/music",
     os.path.expanduser("~/music"),
+    "/home/takai/music",
+    "/home/orin/music",
+    "/home/jetson/music",
+    # Windows
+    r"\\homenas\music",
+    r"\\homenas\homenas_music",
+    r"//homenas/music",
+    r"D:\music",
+    r"E:\music",
+    r"C:\music",
 ]
+
+
+def _safe_log(msg: str):
+    """Windows cp932 等でもクラッシュしない安全な標準出力ログ"""
+    try:
+        print(msg, flush=True)
+    except Exception:
+        try:
+            print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
+        except Exception:
+            pass
 
 
 def resolve_audio_file_path(
@@ -57,58 +79,99 @@ def resolve_audio_file_path(
     Returns:
         実在が確認できたファイルパス（存在しない場合は None）
     """
-    # 1. file_path そのまま
-    if file_path and os.path.isfile(file_path):
-        return os.path.abspath(file_path)
+    # 候補リストを生成
+    base_dirs = []
+    # 1. config.MUSIC_DIR（設定ファイル・環境変数）
+    custom_dir = getattr(config, "MUSIC_DIR", None)
+    if custom_dir:
+        base_dirs.append(custom_dir)
+    # 2. 定義済み検索候補
+    base_dirs.extend(SEARCH_BASE_DIRS)
 
-    # 2. file_path のスラッシュ/バックスラッシュ正規化
+    # パス候補のバリエーションを収集
+    raw_candidates = []
     if file_path:
-        norm = os.path.normpath(file_path)
-        if os.path.isfile(norm):
-            return os.path.abspath(norm)
+        raw_candidates.append(file_path)
+    if relative_path:
+        raw_candidates.append(relative_path)
 
-    # 3. relative_path からの探索
-    rel = (relative_path or "").replace("\\", "/").lstrip("/")
-    if rel:
-        # 3-1. カレントディレクトリ基準
-        if os.path.isfile(rel):
+    # 1. 直接実在チェック
+    for cand in raw_candidates:
+        if cand and os.path.isfile(cand):
+            return os.path.abspath(cand)
+        if cand:
+            norm = os.path.normpath(cand)
+            if os.path.isfile(norm):
+                return os.path.abspath(norm)
+
+    # 2. 相対パスの正規化（NAS/ や USB/ などのプレフィックス除去、Windows UNC プレフィックス除去）
+    rel_variants = set()
+    for cand in raw_candidates:
+        if not cand:
+            continue
+        c_clean = cand.replace("\\", "/").lstrip("/")
+        rel_variants.add(c_clean)
+
+        # moOde MPD プレフィックス除去 (例: "NAS/Artist/Album/01.flac" -> "Artist/Album/01.flac")
+        for pfx in ("NAS/", "USB/", "SDCARD/", "nas/", "usb/", "sdcard/"):
+            if c_clean.startswith(pfx):
+                rel_variants.add(c_clean[len(pfx):].lstrip("/"))
+
+        # Windows UNC プレフィックス除去 (例: "//homenas/music/Artist/..." -> "Artist/...")
+        for uncpfx in ("homenas/music/", "homenas/homenas_music/", "music/"):
+            idx = c_clean.lower().find(uncpfx)
+            if idx != -1:
+                rel_variants.add(c_clean[idx + len(uncpfx):].lstrip("/"))
+
+    # 3. base_dirs × rel_variants の組み合わせ探索
+    for base in base_dirs:
+        if not base:
+            continue
+        for rel in rel_variants:
+            if not rel:
+                continue
+            # そのまま結合
+            full = os.path.normpath(os.path.join(base, rel.replace("/", os.sep)))
+            if os.path.isfile(full):
+                return os.path.abspath(full)
+
+    # 4. カレントディレクトリ基準
+    for rel in rel_variants:
+        if rel and os.path.isfile(rel):
             return os.path.abspath(rel)
 
-        # 3-2. SEARCH_BASE_DIRS 配下の探索
-        for base in SEARCH_BASE_DIRS:
-            candidate = os.path.normpath(os.path.join(base, rel.replace("/", os.sep)))
-            if os.path.isfile(candidate):
-                return os.path.abspath(candidate)
-
-    # 4. file_path からファイル名（basename）を取り出して探索
-    if file_path:
-        fname = os.path.basename(file_path.replace("\\", "/"))
-        if fname:
-            # カレントディレクトリ
-            if os.path.isfile(fname):
-                return os.path.abspath(fname)
+    # 5. ファイル名（basename）単体での探索（カレントまたは base_dirs 直下）
+    for cand in raw_candidates:
+        if not cand:
+            continue
+        fname = os.path.basename(cand.replace("\\", "/"))
+        if not fname:
+            continue
+        if os.path.isfile(fname):
+            return os.path.abspath(fname)
+        for base in base_dirs:
+            if base and os.path.isdir(base):
+                direct_file = os.path.join(base, fname)
+                if os.path.isfile(direct_file):
+                    return os.path.abspath(direct_file)
 
     return None
-
-
-def _safe_log(msg: str):
-    """Windows cp932 等でもクラッシュしない安全な標準出力ログ"""
-    try:
-        print(msg, flush=True)
-    except Exception:
-        try:
-            print(msg.encode("ascii", "replace").decode("ascii"), flush=True)
-        except Exception:
-            pass
 
 
 def write_rating_to_file(file_path: str, rating: int) -> bool:
     """音楽ファイル自体のメタデータタグにレーティング（★1〜5）を書き込む。
 
-    【フォーマット別仕様】
-    - FLAC / OGG / OPUS: Vorbis Comment `RATING` に "1"〜"5"
-    - MP3 / WAV / AIFF: ID3v2 `POPM` (1, 64, 128, 196, 255) および `TXXX:RATING` ("1"〜"5")
-    - M4A / AAC / ALAC: MP4 atom `----:com.apple.iTunes:RATING` (20, 40, 60, 80, 100) / `rate`
+    【フォーマット別タグ仕様・Windows / moOde / foobar2000 最大互換】
+    - FLAC / OGG / OPUS:
+      - Vorbis Comment `RATING`: "20", "40", "60", "80", "100" (★1〜5: Windows/foobar2000標準)
+      - `RATING:no@email` / `RATING_PERCENT`: "20"〜"100"
+      - `RATING_5`: "1"〜"5"
+    - MP3 / WAV / AIFF:
+      - ID3v2 `POPM` (Windows Media Player 9 Series): 1, 64, 128, 196, 255
+      - ID3v2 `POPM` (no@email): 1, 64, 128, 196, 255
+      - `TXXX:RATING`: "60", "80", "100" / `TXXX:Rating WMP`: "3", "4", "5"
+    - M4A / AAC / ALAC:
+      - MP4 atom `----:com.apple.iTunes:RATING` / `rate`: 20, 40, 60, 80, 100
 
     Args:
         file_path: 対象の音楽ファイルパス
@@ -118,24 +181,37 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
         書き込み成功時 True、失敗時 False
     """
     if not os.path.isfile(file_path):
+        _safe_log(f"⚠️ [Tagger] ファイルが存在しないため書き込めません: {file_path}")
         return False
 
     if MutagenFile is None:
-        _safe_log(f"[Tagger] mutagen がインストールされていないためファイルタグ書き込みをスキップ: {file_path}")
+        _safe_log(f"⚠️ [Tagger] mutagen がインストールされていないためスキップ: {file_path}")
         return False
 
     # 1〜5 にクランプ
     rating = max(1, min(5, int(rating)))
+    rating_100 = str(rating * 20)  # 20, 40, 60, 80, 100
+    rating_5 = str(rating)         # 1, 2, 3, 4, 5
     ext = os.path.splitext(file_path)[1].lower()
+
+    # ファイルのパーミッション確認・書き込み権限の付与試行
+    try:
+        if not os.access(file_path, os.W_OK):
+            os.chmod(file_path, 0o666)
+    except Exception:
+        pass
 
     try:
         # 1. FLAC
         if ext == ".flac":
             audio = FLAC(file_path)
-            # 汎用 Vorbis comment: RATING = "1".."5"
-            audio["RATING"] = [str(rating)]
+            # Windows エクスプローラー・foobar2000・moOde 互換: RATING = 20, 40, 60, 80, 100
+            audio["RATING"] = [rating_100]
+            audio["RATING:no@email"] = [rating_100]
+            audio["RATING_PERCENT"] = [rating_100]
+            audio["RATING_5"] = [rating_5]
             audio.save()
-            _safe_log(f"🏷️ [Tagger] FLAC タグに Rating=★{rating} を書き込みました: {file_path}")
+            _safe_log(f"🏷️ [Tagger] FLAC タグに Rating={rating_100} (★{rating}) を書き込みました: {file_path}")
             return True
 
         # 2. MP3
@@ -145,33 +221,39 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
             popm_frames = [
                 POPM(email="Windows Media Player 9 Series", rating=popm_val, count=0),
                 POPM(email="no@email", rating=popm_val, count=0),
+                POPM(email="quodlibet@sacredchao.net", rating=popm_val, count=0),
             ]
-            txxx_frame = [TXXX(desc="RATING", text=[str(rating)])]
+            txxx_frames = [
+                TXXX(desc="RATING", text=[rating_100]),
+                TXXX(desc="Rating WMP", text=[rating_5]),
+                TXXX(desc="POPM", text=[str(popm_val)]),
+            ]
 
             try:
                 audio = MP3(file_path, ID3=ID3)
                 if audio.tags is None:
                     audio.add_tags()
                 audio.tags.setall("POPM", popm_frames)
-                audio.tags.setall("TXXX:RATING", txxx_frame)
+                for t in txxx_frames:
+                    audio.tags.setall(f"TXXX:{t.desc}", [t])
                 audio.save()
             except Exception:
-                # MP3 オーディオフレーム解析失敗時の ID3 直接フォールバック
+                # MP3 フレーム破損時の ID3 直接フォールバック
                 try:
                     id3_tags = ID3(file_path)
                 except ID3NoHeaderError:
                     id3_tags = ID3()
                 id3_tags.setall("POPM", popm_frames)
-                id3_tags.setall("TXXX:RATING", txxx_frame)
+                for t in txxx_frames:
+                    id3_tags.setall(f"TXXX:{t.desc}", [t])
                 id3_tags.save(file_path)
 
-            _safe_log(f"🏷️ [Tagger] MP3 ID3 (POPM={popm_val}, RATING={rating}) を書き込みました: {file_path}")
+            _safe_log(f"🏷️ [Tagger] MP3 ID3 (POPM={popm_val}, RATING={rating_100}, ★{rating}) を書き込みました: {file_path}")
             return True
 
         # 3. M4A / MP4 / AAC / ALAC
         elif ext in (".m4a", ".mp4", ".m4p", ".aac", ".alac"):
             audio = MP4(file_path)
-            # iTunes RATING (20, 40, 60, 80, 100)
             itunes_rate = rating * 20
             audio["----:com.apple.iTunes:RATING"] = [str(itunes_rate).encode("utf-8")]
             try:
@@ -183,33 +265,31 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
             return True
 
         # 4. Ogg Vorbis / Opus
-        elif ext in (".ogg", ".oga"):
-            audio = OggVorbis(file_path)
-            audio["RATING"] = [str(rating)]
+        elif ext in (".ogg", ".oga", ".opus"):
+            if ext == ".opus":
+                audio = OggOpus(file_path)
+            else:
+                audio = OggVorbis(file_path)
+            audio["RATING"] = [rating_100]
+            audio["RATING:no@email"] = [rating_100]
+            audio["RATING_5"] = [rating_5]
             audio.save()
-            _safe_log(f"🏷️ [Tagger] Ogg タグに Rating=★{rating} を書き込みました: {file_path}")
-            return True
-        elif ext == ".opus":
-            audio = OggOpus(file_path)
-            audio["RATING"] = [str(rating)]
-            audio.save()
-            _safe_log(f"🏷️ [Tagger] Opus タグに Rating=★{rating} を書き込みました: {file_path}")
+            _safe_log(f"🏷️ [Tagger] Ogg/Opus タグに Rating={rating_100} (★{rating}) を書き込みました: {file_path}")
             return True
 
         # 5. その他 (WAV, AIFF, DSF 等、汎用 MutagenFile)
         else:
             audio = MutagenFile(file_path)
             if audio is not None and hasattr(audio, "tags") and audio.tags is not None:
-                # ID3 タグがある場合
                 if hasattr(audio.tags, "setall") and POPM is not None:
                     popm_map = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
                     popm_val = popm_map.get(rating, 128)
                     audio.tags.setall("POPM", [POPM(email="Windows Media Player 9 Series", rating=popm_val, count=0)])
-                    audio.tags.setall("TXXX:RATING", [TXXX(desc="RATING", text=[str(rating)])])
+                    audio.tags.setall("TXXX:RATING", [TXXX(desc="RATING", text=[rating_100])])
                 elif hasattr(audio.tags, "__setitem__"):
-                    audio.tags["RATING"] = [str(rating)]
+                    audio.tags["RATING"] = [rating_100]
                 audio.save()
-                _safe_log(f"🏷️ [Tagger] 音源タグに Rating=★{rating} を書き込みました: {file_path}")
+                _safe_log(f"🏷️ [Tagger] 音源タグに Rating={rating_100} (★{rating}) を書き込みました: {file_path}")
                 return True
 
     except Exception as e:
@@ -233,7 +313,7 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
         if ext in (".flac", ".ogg", ".oga", ".opus"):
             audio = MutagenFile(file_path)
             if audio and hasattr(audio, "tags") and audio.tags:
-                for k in ["RATING", "rating", "Rating"]:
+                for k in ["RATING", "rating", "Rating", "RATING:no@email", "RATING_PERCENT", "RATING_5"]:
                     if k in audio.tags:
                         val = str(audio.tags[k][0]).strip()
                         if val.isdigit():
@@ -242,6 +322,9 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                                 return num
                             elif num in (20, 40, 60, 80, 100):
                                 return num // 20
+                            elif num > 0:
+                                # 0〜100 のパーセンテージ換算
+                                return max(1, min(5, round(num / 20)))
 
         # 2. MP3 / WAV / AIFF
         elif ext in (".mp3", ".wav", ".aif", ".aiff"):
@@ -257,7 +340,7 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                 tags_obj = audio.tags if (audio and hasattr(audio, "tags")) else None
 
             if tags_obj:
-                # POPM フレームの確認 (getall または直接探索)
+                # POPM フレームの確認
                 popm_frames = []
                 if hasattr(tags_obj, "getall"):
                     popm_frames.extend(tags_obj.getall("POPM"))
@@ -284,16 +367,21 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                 txxx_frames = []
                 if hasattr(tags_obj, "getall"):
                     txxx_frames.extend(tags_obj.getall("TXXX:RATING"))
+                    txxx_frames.extend(tags_obj.getall("TXXX:Rating WMP"))
                 if hasattr(tags_obj, "values"):
                     for v in tags_obj.values():
-                        if isinstance(v, TXXX) and getattr(v, "desc", "") == "RATING" and v not in txxx_frames:
+                        if isinstance(v, TXXX) and getattr(v, "desc", "") in ("RATING", "Rating WMP") and v not in txxx_frames:
                             txxx_frames.append(v)
 
                 for t in txxx_frames:
                     if hasattr(t, "text") and t.text:
                         val = str(t.text[0]).strip()
-                        if val.isdigit() and 1 <= int(val) <= 5:
-                            return int(val)
+                        if val.isdigit():
+                            num = int(val)
+                            if 1 <= num <= 5:
+                                return num
+                            elif num in (20, 40, 60, 80, 100):
+                                return num // 20
 
         # 3. MP4 / M4A
         elif ext in (".m4a", ".mp4", ".aac", ".alac"):

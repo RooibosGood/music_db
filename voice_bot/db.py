@@ -184,22 +184,58 @@ def update_track_rating(
 
         if not row and file_path:
             norm_path = file_path.replace("\\", "/")
+            # プレフィックス除去 (例: "NAS/Artist/..." -> "Artist/...")
+            stripped_rel = norm_path
+            for pfx in ("NAS/", "USB/", "SDCARD/", "nas/", "usb/", "sdcard/"):
+                if stripped_rel.startswith(pfx):
+                    stripped_rel = stripped_rel[len(pfx):].lstrip("/")
+                    break
+
             fname = norm_path.split("/")[-1]
             fname_stem = os.path.splitext(fname)[0]
             cur.execute(
                 """
                 SELECT id, title, artist, file_path, relative_path, rating FROM tracks
-                WHERE file_path = ? OR relative_path = ? OR relative_path LIKE ? OR file_path LIKE ? OR relative_path LIKE ?
-                ORDER BY CASE WHEN relative_path = ? OR file_path = ? THEN 0 ELSE 1 END
+                WHERE file_path = ? OR relative_path = ? OR relative_path = ?
+                   OR relative_path LIKE ? OR file_path LIKE ? OR relative_path LIKE ?
+                ORDER BY CASE
+                    WHEN relative_path = ? OR relative_path = ? THEN 0
+                    WHEN file_path = ? THEN 1
+                    ELSE 2 END
                 LIMIT 1;
             """,
-                (file_path, norm_path, f"%{fname}", f"%{fname}", f"%{fname_stem}%", norm_path, file_path),
+                (file_path, norm_path, stripped_rel, f"%{fname}", f"%{fname}", f"%{fname_stem}%", norm_path, stripped_rel, file_path),
             )
             row = cur.fetchone()
 
         if not row:
+            # DB レコードが見つからない場合でも、もし実ファイルが存在すればファイルタグ書き込みを試行
+            real_file_path = tagger.resolve_audio_file_path(file_path, file_path)
+            if real_file_path and os.path.isfile(real_file_path):
+                cur_rate = tagger.read_rating_from_file(real_file_path)
+                if direct_rating is not None:
+                    new_rating = max(1, min(5, int(direct_rating)))
+                elif cur_rate is None or cur_rate == 0:
+                    new_rating = 3 if action.lower() in ("good", "like", "up", "plus") else 2
+                else:
+                    new_rating = min(5, cur_rate + 1) if action.lower() in ("good", "like", "up", "plus") else max(1, cur_rate - 1)
+
+                tag_written = tagger.write_rating_to_file(real_file_path, new_rating)
+                conn.close()
+                return {
+                    "success": True,
+                    "title": os.path.basename(real_file_path),
+                    "file": real_file_path,
+                    "real_file_path": real_file_path,
+                    "tag_written": tag_written,
+                    "old_rating": cur_rate,
+                    "rating": new_rating,
+                    "action": action,
+                    "message": f"音源ファイル『{os.path.basename(real_file_path)}』のタグに ★{new_rating} を書き込みました。",
+                }
+
             conn.close()
-            return {"success": False, "message": "評価対象の楽曲がデータベースに見つかりませんでした。"}
+            return {"success": False, "message": "評価対象の楽曲がデータベースおよび音源フォルダに見つかりませんでした。"}
 
         current_rating = row["rating"]
         old_rating = current_rating
@@ -223,7 +259,11 @@ def update_track_rating(
         # 1. 音楽ファイル自体へのメタデータタグ書き込み (FLAC/MP3/M4A等)
         raw_file_path = row["file_path"]
         raw_rel_path = row["relative_path"]
-        real_file_path = tagger.resolve_audio_file_path(raw_file_path, raw_rel_path)
+        # 多重候補から探索
+        real_file_path = (
+            tagger.resolve_audio_file_path(raw_file_path, raw_rel_path)
+            or (tagger.resolve_audio_file_path(file_path, None) if file_path else None)
+        )
         tag_written = False
 
         if real_file_path:
@@ -242,10 +282,11 @@ def update_track_rating(
         artist_str = f"（{track_artist}）" if track_artist and track_artist != "Unknown" else ""
 
         print(
-            f"⭐ [Rating Update] 『{track_title}』{artist_str} の評価を更新: {old_rating} ➔ ★{new_rating} (action={action}, file_tagged={tag_written})",
+            f"⭐ [Rating Update] 『{track_title}』{artist_str} の評価を更新: {old_rating} ➔ ★{new_rating} (action={action}, file_tagged={tag_written}, path={real_file_path})",
             flush=True,
         )
 
+        tag_status_msg = "（ファイルタグにも保存完了）" if tag_written else "（※DBのみ更新）"
         return {
             "success": True,
             "track_id": target_id,
@@ -257,7 +298,7 @@ def update_track_rating(
             "old_rating": old_rating,
             "rating": new_rating,
             "action": action,
-            "message": f"『{track_title}』を ★{new_rating} に評価しました。",
+            "message": f"『{track_title}』を ★{new_rating} に評価しました。{tag_status_msg}",
         }
 
     except Exception as e:

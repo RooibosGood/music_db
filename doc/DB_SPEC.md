@@ -97,8 +97,8 @@
   - **評価済み時 ＋ バッド👎** ➔ **★を−1**（最小値: ★1）
 - **音源ファイル本体タグへの直接同期書き込み**:
   評価更新時は、データベースの `rating` カラムだけでなく、音源ファイル本体（FLAC, MP3, M4A, OGG等）のメタデータ欄にも直接評価タグを書き込み保存します（`voice_bot/tagger.py`）。
-  - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` (`"1"`〜`"5"`)
-  - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter: 1, 64, 128, 196, 255) ＋ `TXXX:RATING` (`"1"`〜`"5"`)
+  - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` (`"20"`, `"40"`, `"60"`, `"80"`, `"100"`: Windows/foobar2000標準), `RATING_5` (`"1"`〜`"5"`), `RATING_PERCENT`, `RATING:no@email`
+  - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter: 1, 64, 128, 196, 255) ＋ `TXXX:RATING` (`"60"`, `"80"`, `"100"`) ＋ `TXXX:Rating WMP` (`"1"`〜`"5"`)
   - **M4A / AAC / ALAC**: MP4 atom `----:com.apple.iTunes:RATING` / `rate` (20, 40, 60, 80, 100)
   - ※ライブラリ初期構築時（`build_music_db.py`）も、音源ファイル本体に既存の Rating タグがあれば自動的に初期値として取り込まれます。
 
