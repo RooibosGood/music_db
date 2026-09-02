@@ -122,7 +122,7 @@ Audio_SQL/
 │   ├── config.py           # 設定値・定数定義 & voice_bot_config.json ロード
 │   ├── state.py            # 共有状態管理（WebSocketクライアントリスト、チャット履歴等）
 │   ├── broadcaster.py      # WebSocket リアルタイム配信 & 進行ステータス通知
-│   ├── daily_info.py       # 天気・日付・今日のエピソード取得 & 起動ナレーション生成
+│   ├── daily_info.py       # 天気・日付・今日の音楽トピックス取得 & 起動ナレーション生成
 │   ├── llm.py              # LLM 意図解析 (llama.cpp) & ユーザーリクエスト処理コア
 │   ├── watcher.py          # トラック変更監視ループ (2曲目以降の自動解説) & 起動案内
 │   ├── stt.py              # 音声認識 (Whisperモデル、マイク録音、STT処理、音声ループ)
@@ -149,7 +149,7 @@ Audio_SQL/
 | :--- | :--- |
 | **`voice_bot_config.json`** | システム全体の設定ファイル。デモモード、moOde IP・ポート、LLMモデル、アナウンス言語、オーディオデバイス、滋賀県栗東市等の天気設定、Webサーバー設定を管理。 |
 | **`voice_bot/config.py`** | `load_config_from_file()` による `voice_bot_config.json` の自動パース・反映、`save_config_to_file()` による設定保存・永続化、および `get_current_settings()`。 |
-| **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、および llama.cpp LLM を用いた起動時デイリーナレーションの自動生成・フォールバック合成。 |
+| **`voice_bot/daily_info.py`** | Open-Meteo API による天気取得、Wikipedia による今日にちなんだ音楽トピックス（アーティスト生誕・名盤リリース・音楽史の出来事）取得、および llama.cpp LLM を用いた起動時デイリー音楽オープニングナレーションの自動生成・フォールバック合成。 |
 | **`voice_bot/state.py`** | `chat_history`, `active_websockets`, `voice_state`, `current_processing_state` の定義、一意ID生成・重複排除 (`create_chat_message()`, `append_chat_message()`)、および同一曲判定ヘルパー `is_same_track()`。 |
 | **`voice_bot/broadcaster.py`** | `broadcast_event()`, `broadcast_process_status()`, `broadcast_status()` による WebSocket 全体へのリアルタイムプッシュ通信。 |
 | **`voice_bot/llm.py`** | `http_post_json()`, `parse_intent_with_llm()` による LLM 意図解析、および `process_user_message()` による音声・チャット共通処理エンジン。 |
@@ -379,7 +379,7 @@ ProcessCommand --> Idle : 処理実行・返答
 
 ### 5.7 起動アナウンス & デイリーインフォメーション (`voice_bot/daily_info.py`, `voice_bot/watcher.py`)
 
-システム起動時、初期ガイダンス（「Hello!...」/「こんにちは！...」）に続いて、**今日の日付・天気・今日にちなんだエピソード（歴史的出来事・音楽記念日等）** を自然に繋げて発話・Webチャットへ配信します。
+システム起動時、初期ガイダンス（「Hello!...」/「こんにちは！...」）に続いて、**今日の日付・天気・今日にちなんだ音楽トピックス（名盤・名曲リリース、アーティスト生誕、音楽史の記念日等）** を自然に繋げて発話・Webチャットへ配信します。
 
 #### 1. 情報収集フロー
 1. **今日の日付 (`format_current_date`)**:
@@ -388,13 +388,13 @@ ProcessCommand --> Idle : 処理実行・返答
 2. **天気情報の取得 (`fetch_weather_forecast`)**:
    - **Open-Meteo API**（APIキー不要）を利用し、設定された都市（デフォルト: 滋賀県栗東市 / Ritto, Shiga）の現在天気・気温および予想最高・最低気温を取得。
    - WMO Weather Code を英語および日本語の天況表現に自動マッピング。
-3. **今日のエピソードの取得 (`fetch_today_episode`)**:
-   - **英語**: **Wikipedia On This Day API** (`https://en.wikipedia.org/api/rest_v1/feed/onthisday/all/{MM}/{DD}`) から、音楽・文化・歴史的出来事・記念日を検索。
-   - **日本語**: **Wikipedia API**（X月X日の概要・記念日）から今日のトピック・記念日を抽出。
+3. **今日の音楽トピックスの取得 (`fetch_today_music_episode`)**:
+   - **英語**: **Wikipedia On This Day API** (`https://en.wikipedia.org/api/rest_v1/feed/onthisday/all/{MM}/{DD}`) から、単語境界正規表現（`music`, `song`, `album`, `band`, `singer`, `composer`, `concert`, `jazz`, `beatles`, `hit single` 等）を用いて音楽関連の歴史的出来事・アーティスト生誕・名盤リリース情報を高精度に抽出。
+   - **日本語**: **Wikipedia API**（X月X日の全文）から、音楽キーワード（`音楽`, `楽曲`, `アルバム`, `歌手`, `ミュージシャン`, `作曲家`, `作詞家`, `指揮者`, `ピアニスト`, `ギタリスト`, `バンド`, `ジャズ`, `クラシック音楽`, `レコード`, `コンサート`, `日本レコード大賞` 等）を含む行を抽出し、スポーツ（シングルス）等の非音楽項目を除外して選定。
 
-#### 2. LLM による自然なナレーション文生成 (`generate_daily_intro`)
-- 収集した日付・天気・エピソード情報を **llama.cpp LLM (`config.LLM_MODEL`)** に渡し、初期挨拶に続く 2〜3文のラジオDJ / アシスタント風トークを自動生成。
-- LLM オフライン時や応答遅延時は、定型テンプレート合成へ自動フォールバックし、停止することなく確実に案内を発話。
+#### 2. LLM による自然な音楽オープニングナレーション文生成 (`generate_daily_intro`)
+- 収集した日付・天気・音楽トピック情報を **llama.cpp LLM (`config.LLM_MODEL`)** に渡し、初期挨拶に続く 2〜3文の FM ラジオ DJ / 音楽アシスタント風オープニングトークを自動生成。
+- LLM オフライン時や応答遅延時は、音楽史に即した定型テンプレート合成へ自動フォールバックし、停止することなく確実に案内を発話。
 
 ---
 

@@ -1,19 +1,78 @@
-"""moOde 音声ボット デイリーインフォメーション（日付・天気・今日のエピソード）モジュール。
+"""moOde 音声ボット デイリーインフォメーション（日付・天気・今日の音楽トピックス）モジュール。
 
-Open-Meteo API による天気取得、Wikipedia / Web検索による今日のエピソード取得、
-および llama-server (llama.cpp) を用いた自然なラジオDJ/アシスタント風ナレーション生成を提供します。
+Open-Meteo API による天気取得、Wikipedia による今日にちなんだ音楽トピックス（アーティスト生誕・名盤リリース・音楽史の出来事）取得、
+および llama-server (llama.cpp) を用いた自然なラジオDJ/アシスタント風音楽オープニングトーク生成を提供します。
 """
 
 import datetime
 import json
+import random
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from . import config
 from .broadcaster import broadcast_process_status
+
+
+# ==================== 音楽トピックス抽出用キーワード・正規表現 ====================
+MUSIC_KEYWORDS_JA: List[str] = [
+    "音楽", "楽曲", "名曲", "ヒット曲", "アルバム",
+    "歌手", "ミュージシャン", "シンガー", "ボーカル", "作曲家", "作詞家",
+    "指揮者", "ピアニスト", "ギタリスト", "ベーシスト", "ドラマー", "バイオリニスト",
+    "チェリスト", "サックス奏者", "トランペット奏者", "オーケストラ", "交響楽団",
+    "ロックバンド", "ジャズ", "クラシック音楽", "ポップス",
+    "コンサート", "ライブツアー", "音楽祭", "音楽賞", "グラミー賞", "日本レコード大賞",
+    "オリコン", "ビルボード", "ビートルズ", "モーツァルト", "ベートーヴェン", "ショパン",
+    "バッハ", "ブラームス", "チャイコフスキー", "エルヴィス", "クイーン"
+]
+
+MUSIC_PHRASES_JA: List[str] = [
+    r"シングル(曲|盤|CD|発売|リリース)",
+    r"レコード(大賞|会社|レーベル|盤|発売|デビュー|録音|プレイヤー|コンサート)",
+    r"バンド(活動|結成|解散|演奏|リーダー)",
+    r"ライブ(ハウス|ツアー|公演|イベント|ステージ)"
+]
+
+EXCLUDE_PATTERNS_JA: List[str] = [
+    r"シングルス", r"ロックスプリングス", r"ロッククライミング", r"ロックダウン",
+    r"字光式", r"ピル", r"ロックアイス", r"ロックアウト", r"ロックフェラー",
+    r"世界記録", r"日本記録", r"最高記録", r"大会記録"
+]
+
+MUSIC_REGEX_JA = re.compile(
+    "|".join([re.escape(k) for k in MUSIC_KEYWORDS_JA] + MUSIC_PHRASES_JA)
+)
+EXCLUDE_REGEX_JA = re.compile("|".join(EXCLUDE_PATTERNS_JA))
+
+
+MUSIC_KEYWORDS_EN: List[str] = [
+    "music", "musical", "musician", "song", "songs", "songwriter", "album", "albums",
+    "band", "bands", "singer", "singers", "singing", "vocalist", "vocal",
+    "composer", "composed", "conductor", "pianist", "piano", "guitarist", "guitar",
+    "drummer", "drums", "bassist", "bass guitar", "violinist", "violin", "cello", "cellist",
+    "saxophonist", "saxophone", "trumpet", "orchestra", "orchestral", "symphony", "symphonic",
+    "concert", "concerts", "grammy", "billboard", "discography",
+    "beatles", "jazz", "rock and roll", "rock band", "rock music", "classical music",
+    "opera", "operas", "operatic", "hip hop", "r&b", "pop music", "woodstock",
+    "synthesizer", "motown", "reggae", "blues", "heavy metal", "funk", "disco"
+]
+
+MUSIC_PHRASES_EN: List[str] = [
+    r"\b(hit|debut|lead|new)\s+single\b",
+    r"\breleased\s+(a|the|their|his|her)\s+(single|album|song|record)\b",
+    r"\brecorded\s+(a|the|their|his|her)\s+(single|album|song|track)\b",
+    r"\b(record\s+label|record\s+album|vinyl\s+record|gold\s+record|platinum\s+record)\b",
+    r"\b(live\s+album|studio\s+album|debut\s+album)\b",
+    r"\b(music\s+festival|music\s+award|music\s+hall\s+of\s+fame)\b"
+]
+
+MUSIC_REGEX_EN = re.compile(
+    "|".join([r"\b(" + "|".join(re.escape(k) for k in MUSIC_KEYWORDS_EN) + r")\b"] + MUSIC_PHRASES_EN),
+    re.IGNORECASE,
+)
 
 
 # ==================== WMO 天気コード マッピング ====================
@@ -150,8 +209,8 @@ def fetch_weather_forecast(
         }
 
 
-def fetch_today_episode(language: str = "en", timeout: float = 6.0) -> Dict[str, Any]:
-    """今日（月日）にちなんだ歴史的出来事・音楽エピソード・記念日をWeb/Wikipediaから取得"""
+def fetch_today_music_episode(language: str = "en", timeout: float = 6.0) -> Dict[str, Any]:
+    """今日（月日）にちなんだ音楽トピックス（アーティスト生誕・名盤リリース・音楽史の出来事）を取得"""
     now = datetime.datetime.now()
     month = now.month
     day = now.day
@@ -167,62 +226,55 @@ def fetch_today_episode(language: str = "en", timeout: float = 6.0) -> Dict[str,
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
 
-            # 音楽やアート、カルチャー関連のイベントを優先的に検索
-            music_keywords = [
-                "music", "song", "album", "band", "singer", "beatles", "jazz",
-                "rock", "symphony", "composer", "concert", "orchestra", "grammy",
-                "guitar", "piano", "recorded", "released"
+            music_events: List[str] = []
+
+            # 1. events, selected, births, deaths から音楽関連を収集
+            categories = [
+                ("events", data.get("selected", []) + data.get("events", [])),
+                ("births", data.get("births", [])),
+                ("deaths", data.get("deaths", [])),
             ]
 
-            all_events = data.get("selected", []) + data.get("events", [])
-            chosen_event = None
+            for cat_name, items in categories:
+                for item in items:
+                    text = item.get("text", "")
+                    # 単語境界正規表現でマッチング
+                    if MUSIC_REGEX_EN.search(text):
+                        year = item.get("year", "")
+                        year_str = f"in {year}" if year else ""
+                        if cat_name == "births":
+                            music_events.append(f"Born on this day {year_str}: {text}")
+                        elif cat_name == "deaths":
+                            music_events.append(f"Remembering on this day {year_str}: {text}")
+                        else:
+                            music_events.append(f"On this day {year_str}, {text}")
 
-            # 1. 音楽関連イベントを探す
-            for ev in all_events:
-                ev_text = ev.get("text", "")
-                if any(kw in ev_text.lower() for kw in music_keywords):
-                    year = ev.get("year", "")
-                    year_str = f"in {year}" if year else ""
-                    chosen_event = f"On this day {year_str}, {ev_text}"
-                    break
+            chosen_event = ""
+            if music_events:
+                # 音楽トピックの中からランダム選定
+                chosen_event = random.choice(music_events[:6])
+            else:
+                chosen_event = f"On this day ({month}/{day}) in music history, legendary artists and timeless tracks continue to resonate."
 
-            # 2. 音楽関連がなければ注目の歴史イベント (selected または events)
-            if not chosen_event and all_events:
-                ev = all_events[0]
-                year = ev.get("year", "")
-                year_str = f"in {year}" if year else ""
-                chosen_event = f"On this day {year_str}, {ev.get('text', '')}"
-
-            # 3. 記念日 (holidays) のチェック
-            holidays = data.get("holidays", [])
-            holiday_text = ""
-            if holidays:
-                h_name = holidays[0].get("text", "")
-                if h_name:
-                    holiday_text = f"Today is also celebrated as {h_name}."
-
-            episode_summary = chosen_event or holiday_text or "Today is a wonderful day to enjoy your favorite music."
             return {
                 "success": True,
-                "episode": episode_summary,
-                "holiday": holiday_text,
+                "episode": chosen_event,
             }
 
         except Exception as e:
-            print(f"⚠️ [daily_info] 英語エピソードの取得に失敗しました: {e}", flush=True)
+            print(f"⚠️ [daily_info] 英語音楽トピックスの取得に失敗しました: {e}", flush=True)
             return {
                 "success": False,
-                "episode": "Today is a great day filled with timeless melodies and good vibes.",
-                "holiday": "",
+                "episode": f"Today in music history is celebrated with timeless melodies and inspiring tracks.",
             }
 
     else:
-        # 日本語: Wikipedia API (X月X日の概要・記念日)
+        # 日本語: Wikipedia API (X月X日の全文から音楽トピックを抽出)
         title_str = f"{month}月{day}日"
         encoded_title = urllib.parse.quote(title_str)
         url = (
             f"https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&"
-            f"exintro=1&titles={encoded_title}&format=json"
+            f"titles={encoded_title}&format=json"
         )
         try:
             req = urllib.request.Request(
@@ -239,42 +291,51 @@ def fetch_today_episode(language: str = "en", timeout: float = 6.0) -> Dict[str,
                 if extract:
                     break
 
-            episode_text = ""
+            matched_lines: List[str] = []
             if extract:
-                # 概要文を整形（不要な行や導入部を整理）
                 lines = [line.strip() for line in extract.splitlines() if line.strip()]
-                # 記念日や出来事に関わる行を探す
                 for line in lines:
-                    if any(k in line for k in ["記念日", "日", "制定", "出来事", "周年", "誕生"]):
-                        if len(line) > 10 and not line.startswith("=="):
-                            episode_text = line
-                            break
-                if not episode_text and lines:
-                    episode_text = lines[0]
+                    if line.startswith("==") or len(line) < 8:
+                        continue
+                    if EXCLUDE_REGEX_JA.search(line):
+                        continue
+                    if MUSIC_REGEX_JA.search(line):
+                        # 先頭の記号などをクリーンアップ
+                        cleaned_line = line.lstrip("*-・• ").strip()
+                        matched_lines.append(cleaned_line)
 
-            if not episode_text:
-                episode_text = f"{month}月{day}日は、新しい音楽の発見にぴったりの素敵な一日です。"
+            chosen_topic = ""
+            if matched_lines:
+                # 年号付きのトピックを優先（上位候補からランダム選定）
+                candidates = matched_lines[:6]
+                chosen_topic = random.choice(candidates)
+            else:
+                chosen_topic = f"{month}月{day}日は、数々の名曲や素晴らしいアーティストの歴史に彩られた一日です。"
 
             return {
                 "success": True,
-                "episode": episode_text,
+                "episode": chosen_topic,
             }
 
         except Exception as e:
-            print(f"⚠️ [daily_info] 日本語エピソードの取得に失敗しました: {e}", flush=True)
+            print(f"⚠️ [daily_info] 日本語音楽トピックスの取得に失敗しました: {e}", flush=True)
             return {
                 "success": False,
-                "episode": f"{month}月{day}日は、素晴らしい音楽とともに過ごす最高の一日です。",
+                "episode": f"{month}月{day}日は、素晴らしい音楽の歴史とともに過ごす最高の一日です。",
             }
 
 
+# 互換性のためのエイリアス
+fetch_today_episode = fetch_today_music_episode
+
+
 def generate_daily_intro(language: str = "en") -> str:
-    """日付・天気・今日のエピソードを統合し、LLM またはフォールバックで自然なナレーション文を生成"""
-    broadcast_process_status("info", "🌐 今日の天気・日付・Webエピソードを取得中...")
+    """日付・天気・今日の音楽トピックスを統合し、LLM またはフォールバックで自然な音楽オープニングナレーション文を生成"""
+    broadcast_process_status("info", "🌐 今日の天気・日付・音楽トピックスを取得中...")
 
     date_str = format_current_date(language)
     weather_info = fetch_weather_forecast()
-    episode_info = fetch_today_episode(language)
+    episode_info = fetch_today_music_episode(language)
 
     weather_summary = (
         weather_info.get("summary_en", "")
@@ -283,38 +344,42 @@ def generate_daily_intro(language: str = "en") -> str:
     )
     episode_text = episode_info.get("episode", "")
 
-    # llama.cpp を使って自然で洗練されたナレーションを生成
-    broadcast_process_status("llm", "🤖 起動アナウンスを生成中 (llama.cpp)...")
+    # llama.cpp を使って自然で洗練された音楽オープニングトークを生成
+    broadcast_process_status("llm", "🤖 起動アナウンス（音楽トピックス）を生成中 (llama.cpp)...")
 
     if language == "en":
         system_prompt = (
             "You are a charismatic, smooth, and friendly FM radio DJ on an AI music station. "
-            "Given today's date, weather summary, and an interesting episode or anniversary, "
-            "write a concise, engaging 2-3 sentence introductory talk that flows smoothly. "
-            "Do NOT include greetings like 'Hello' or 'Hi' since they have already been spoken. "
-            "Directly state the date and weather in a warm tone, mention the trivia/episode, "
-            "and build anticipation for good music. Keep it under 50 words."
+            "Given today's date, weather summary, and a music-related topic on this day (such as an iconic album release, artist birthday, or music history milestone), "
+            "write a concise, engaging 2-3 sentence radio station opening talk that flows smoothly.\n"
+            "Rules:\n"
+            "- Do NOT include greetings like 'Hello' or 'Hi' as they have already been spoken.\n"
+            "- Smoothly mention the date, weather, and then highlight today's music topic/trivia.\n"
+            "- Conclude with a warm, uplifting sentence building anticipation for enjoying good music.\n"
+            "- Keep it under 55 words."
         )
         user_prompt = (
             f"Date: {date_str}\n"
             f"Weather: {weather_summary}\n"
-            f"Episode/Trivia: {episode_text}\n\n"
-            "Please generate the smooth radio DJ announcement talk."
+            f"Music Topic on this day: {episode_text}\n\n"
+            "Please generate the smooth radio DJ opening talk focusing on today's music topic."
         )
     else:
         system_prompt = (
-            "あなたは親しみやすく落ち着いた声の moOde AI 音楽アシスタントです。"
-            "今日の日付、天気情報、および今日にちなんだ出来事や記念日のエピソードをもとに、"
-            "最初の挨拶に自然に続く、聞き取りやすく心地よい2〜3文のオープニングトークを作成してください。"
-            "「こんにちは」などの冒頭の挨拶は既に発話済みのため含めず、"
-            "日付と天気、そして今日のエピソードを紹介し、音楽を楽しむ気持ちを盛り上げる言葉で結んでください。"
-            "100文字〜150文字程度で簡潔に出力してください。"
+            "あなたは親しみやすく落ち着いた声の moOde AI 音楽アシスタント（ラジオDJ風）です。"
+            "今日の日付、天気情報、そして「今日にちなんだ音楽トピックス（名曲・名盤の発売、有名ミュージシャンの生誕、歴史的出来事など）」をもとに、"
+            "最初の挨拶に自然に続く、心地よい2〜3文のオープニングトークを作成してください。\n"
+            "【ルール】\n"
+            "・「こんにちは」等の冒頭挨拶は既に発話済みのため含めないこと。\n"
+            "・日付と天気を簡潔に伝えた後、今日にちなんだ音楽のエピソードを紹介すること。\n"
+            "・最後は音楽を聴く時間を楽しみにできるような心地よい言葉で結ぶこと。\n"
+            "・100文字〜150文字程度で簡潔に出力すること。"
         )
         user_prompt = (
             f"日付: {date_str}\n"
             f"天気: {weather_summary}\n"
-            f"今日のエピソード: {episode_text}\n\n"
-            "自然な続きのナレーション文を生成してください。"
+            f"今日の音楽トピックス: {episode_text}\n\n"
+            "上記の情報をもとに、音楽ファンが楽しめる自然なオープニングナレーション文を生成してください。"
         )
 
     payload = {
@@ -344,7 +409,7 @@ def generate_daily_intro(language: str = "en") -> str:
             cleaned = cleaned.replace("```", "").replace("\n", " ").strip()
 
             if cleaned and len(cleaned) >= 15:
-                print(f"🎙️ [daily_info] LLM生成ナレーション: {cleaned}", flush=True)
+                print(f"🎙️ [daily_info] LLM生成音楽ナレーション: {cleaned}", flush=True)
                 return cleaned
 
     except Exception as e:
@@ -352,6 +417,6 @@ def generate_daily_intro(language: str = "en") -> str:
 
     # フォールバックテンプレート合成（llama-server がオフラインまたはタイムアウト時）
     if language == "en":
-        return f"Today is {date_str}. {weather_summary} By the way, {episode_text}"
+        return f"Today is {date_str}. {weather_summary} In music history today, {episode_text}"
     else:
-        return f"本日は{date_str}です。{weather_summary} ちなみに、{episode_text}"
+        return f"本日は{date_str}です。{weather_summary} 音楽の歴史を振り返ると、{episode_text}"
