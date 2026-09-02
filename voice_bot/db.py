@@ -265,15 +265,20 @@ def update_track_rating(
             or (tagger.resolve_audio_file_path(file_path, None) if file_path else None)
         )
         tag_written = False
+        tag_msg = ""
+        tag_error = None
 
         if real_file_path:
-            tag_written = tagger.write_rating_to_file(real_file_path, new_rating)
+            tag_written, tag_msg = tagger.write_rating_to_file(real_file_path, new_rating)
+            if not tag_written:
+                tag_error = tag_msg
         else:
+            tag_msg = f"音源ファイルが見つかりません (DBパス: {raw_file_path}, 相対パス: {raw_rel_path}, 探索先: /mnt/music)"
+            tag_error = tag_msg
             print(f"⚠️ [Rating Update] NAS音源ファイルが見つからないためタグ書き込みをスキップしました。", flush=True)
             print(f"   DB登録パス: {raw_file_path}", flush=True)
             print(f"   相対パス: {raw_rel_path}", flush=True)
-            print(f"   💡 Jetson 端末上で NAS (//homenas/music) が /mnt/nas/music 等にマウントされているか確認してください:", flush=True)
-            print(f"      bash setup_nas_mount.sh", flush=True)
+            print(f"   💡 Jetson 端末上で NAS が /mnt/music にマウントされているか確認してください。", flush=True)
 
         # 2. DB 更新
         target_id = row["id"]
@@ -289,8 +294,14 @@ def update_track_rating(
             f"⭐ [Rating Update] 『{track_title}』{artist_str} の評価を更新: {old_rating} ➔ ★{new_rating} (action={action}, file_tagged={tag_written}, path={real_file_path})",
             flush=True,
         )
+        if not tag_written:
+            print(f"❌ [Rating Update] タグ書き込み失敗理由: {tag_msg}", flush=True)
 
-        tag_status_msg = "（NASファイルタグにも保存完了）" if tag_written else "（※DBのみ更新）"
+        if tag_written:
+            user_msg = f"『{track_title}』を ★{new_rating} に評価しました。（NAS音源ファイルタグにも保存完了）"
+        else:
+            user_msg = f"『{track_title}』を ★{new_rating} に評価しました。（⚠️ 音源ファイルへのタグ書き込み失敗: {tag_msg}）"
+
         return {
             "success": True,
             "track_id": target_id,
@@ -299,10 +310,12 @@ def update_track_rating(
             "file": row["relative_path"] or row["file_path"],
             "real_file_path": real_file_path,
             "tag_written": tag_written,
+            "tag_msg": tag_msg,
+            "tag_error": tag_error,
             "old_rating": old_rating,
             "rating": new_rating,
             "action": action,
-            "message": f"『{track_title}』を ★{new_rating} に評価しました。{tag_status_msg}",
+            "message": user_msg,
         }
 
     except Exception as e:

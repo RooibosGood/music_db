@@ -11,7 +11,7 @@ mutagen を用いて、FLAC / MP3 / M4A / AAC / OGG / WAV / AIFF / DSF 等の各
 import os
 import re
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import config
 
@@ -35,10 +35,12 @@ except ImportError:
 
 
 # Jetson (Linux) / Windows で想定される音楽ディレクトリのプレフィックス候補
-# ユーザー指定の /mnt/music を最優先候補として定義
 STATIC_SEARCH_BASE_DIRS: List[str] = [
     # Linux / Jetson マウント先 (最優先: /mnt/music)
     "/mnt/music",
+    "/mnt/music/music",
+    "/mnt/music/homenas/music",
+    "/mnt/music/home/music",
     "/mnt/nas/music",
     "/mnt/nas_music",
     "/mnt/nas",
@@ -84,13 +86,11 @@ def get_system_nas_mount_points() -> List[str]:
                     parts = line.strip().split()
                     if len(parts) >= 3:
                         src, target, fstype = parts[0], parts[1], parts[2]
-                        # cifs, smbfs, nfs, sshfs, または homenas / music を含むマウント
                         is_nas_fs = fstype in ("cifs", "smbfs", "nfs", "nfs4", "fuse", "fuse.rclone")
                         is_nas_path = "homenas" in src.lower() or "home" in src.lower() or "music" in target.lower() or "nas" in target.lower()
                         if is_nas_fs or is_nas_path:
                             if target not in mounts:
                                 mounts.append(target)
-                            # サブディレクトリに music がある場合
                             sub_music = os.path.join(target, "music")
                             if os.path.isdir(sub_music) and sub_music not in mounts:
                                 mounts.append(sub_music)
@@ -119,7 +119,6 @@ def resolve_audio_file_path(
     rel_clean = None
     if relative_path:
         rel_clean = relative_path.replace("\\", "/").lstrip("/")
-        # moOde MPD プレフィックス除去
         for pfx in ("NAS/", "USB/", "SDCARD/", "nas/", "usb/", "sdcard/"):
             if rel_clean.startswith(pfx):
                 rel_clean = rel_clean[len(pfx):].lstrip("/")
@@ -128,7 +127,6 @@ def resolve_audio_file_path(
     # 2. file_path から relative_path を抽出（\\homenas\music\ や \\home\music\, NAS/ の剥離）
     if file_path and not rel_clean:
         fp_norm = file_path.replace("\\", "/").lstrip("/")
-        # moOde MPD プレフィックス
         for pfx in ("NAS/", "USB/", "SDCARD/", "nas/", "usb/", "sdcard/"):
             if fp_norm.startswith(pfx):
                 fp_norm = fp_norm[len(pfx):].lstrip("/")
@@ -144,18 +142,20 @@ def resolve_audio_file_path(
             if not rel_clean:
                 rel_clean = fp_norm
 
-    # 3. 【最優先】Jetson の標準マウント先 /mnt/music との直接結合チェック
+    # 3. 【最優先】Jetson の標準マウント先 /mnt/music 配下の多階層チェック
     if rel_clean:
-        mnt_music_path = os.path.normpath(os.path.join("/mnt/music", rel_clean.replace("/", os.sep)))
-        if os.path.isfile(mnt_music_path):
-            return os.path.abspath(mnt_music_path)
+        for prefix in ["", "music", "homenas/music", "home/music"]:
+            candidate = os.path.normpath(os.path.join("/mnt/music", prefix, rel_clean.replace("/", os.sep)))
+            if os.path.isfile(candidate):
+                return os.path.abspath(candidate)
 
     # 4. 【第2優先】config.MUSIC_DIR との結合チェック
     custom_dir = getattr(config, "MUSIC_DIR", None)
     if custom_dir and rel_clean:
-        custom_path = os.path.normpath(os.path.join(custom_dir, rel_clean.replace("/", os.sep)))
-        if os.path.isfile(custom_path):
-            return os.path.abspath(custom_path)
+        for prefix in ["", "music", "homenas/music", "home/music"]:
+            candidate = os.path.normpath(os.path.join(custom_dir, prefix, rel_clean.replace("/", os.sep)))
+            if os.path.isfile(candidate):
+                return os.path.abspath(candidate)
 
     # 5. 【第3優先】file_path の直接実在チェック（Windows UNC パス \\homenas\music\... やローカル絶対パス）
     if file_path and os.path.isfile(file_path):
@@ -172,7 +172,6 @@ def resolve_audio_file_path(
     base_dirs.extend(get_system_nas_mount_points())
     base_dirs.extend(STATIC_SEARCH_BASE_DIRS)
 
-    # 重複除去
     seen_bases = set()
     unique_bases = []
     for b in base_dirs:
@@ -219,7 +218,7 @@ def resolve_audio_file_path(
     return None
 
 
-def write_rating_to_file(file_path: str, rating: int) -> bool:
+def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
     """NAS上の音楽ファイル自体のメタデータタグにレーティング（★1〜5）を直接書き込む。
 
     【フォーマット別タグ仕様・Windows / moOde / foobar2000 最大互換】
@@ -239,15 +238,20 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
         rating: 1〜5 の整数
 
     Returns:
-        書き込み成功時 True、失敗時 False
+        (success: bool, detail_message: str)
     """
+    if not file_path:
+        return False, "ファイルパスが指定されていません。"
+
     if not os.path.isfile(file_path):
-        _safe_log(f"❌ [Tagger] 音源ファイルが存在しません: {file_path}")
-        return False
+        msg = f"音源ファイルが存在しません: {file_path}"
+        _safe_log(f"❌ [Tagger] {msg}")
+        return False, msg
 
     if MutagenFile is None:
-        _safe_log(f"⚠️ [Tagger] mutagen が未インストールのためタグ書き込みをスキップ: {file_path}")
-        return False
+        msg = "mutagen ライブラリがインストールされていません (pip install mutagen)"
+        _safe_log(f"⚠️ [Tagger] {msg}")
+        return False, msg
 
     # 1〜5 にクランプ
     rating = max(1, min(5, int(rating)))
@@ -266,14 +270,14 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
         # 1. FLAC
         if ext == ".flac":
             audio = FLAC(file_path)
-            # Windows エクスプローラー・foobar2000・moOde 互換: RATING = 20, 40, 60, 80, 100
             audio["RATING"] = [rating_100]
             audio["RATING:no@email"] = [rating_100]
             audio["RATING_PERCENT"] = [rating_100]
             audio["RATING_5"] = [rating_5]
             audio.save()
-            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (FLAC RATING={rating_100}, ★{rating}): {file_path}")
-            return True
+            msg = f"FLAC タグに RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
+            _safe_log(f"✅ [Tagger] {msg}")
+            return True, msg
 
         # 2. MP3
         elif ext == ".mp3":
@@ -299,7 +303,6 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
                     audio.tags.setall(f"TXXX:{t.desc}", [t])
                 audio.save()
             except Exception:
-                # MP3 フレーム破損時の ID3 直接フォールバック
                 try:
                     id3_tags = ID3(file_path)
                 except ID3NoHeaderError:
@@ -309,8 +312,9 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
                     id3_tags.setall(f"TXXX:{t.desc}", [t])
                 id3_tags.save(file_path)
 
-            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (MP3 POPM={popm_val}, RATING={rating_100}, ★{rating}): {file_path}")
-            return True
+            msg = f"MP3 ID3 タグに POPM={popm_val}, RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
+            _safe_log(f"✅ [Tagger] {msg}")
+            return True, msg
 
         # 3. M4A / MP4 / AAC / ALAC
         elif ext in (".m4a", ".mp4", ".m4p", ".aac", ".alac"):
@@ -322,8 +326,9 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
             except Exception:
                 pass
             audio.save()
-            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (MP4 RATING={itunes_rate}, ★{rating}): {file_path}")
-            return True
+            msg = f"MP4 タグに RATING={itunes_rate} (★{rating}) を書き込みました ({file_path})"
+            _safe_log(f"✅ [Tagger] {msg}")
+            return True, msg
 
         # 4. Ogg Vorbis / Opus
         elif ext in (".ogg", ".oga", ".opus"):
@@ -335,10 +340,11 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
             audio["RATING:no@email"] = [rating_100]
             audio["RATING_5"] = [rating_5]
             audio.save()
-            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (Ogg/Opus RATING={rating_100}, ★{rating}): {file_path}")
-            return True
+            msg = f"Ogg/Opus タグに RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
+            _safe_log(f"✅ [Tagger] {msg}")
+            return True, msg
 
-        # 5. その他 (WAV, AIFF, DSF 等、汎用 MutagenFile)
+        # 5. その他 (WAV, AIFF, DSF 等)
         else:
             audio = MutagenFile(file_path)
             if audio is not None and hasattr(audio, "tags") and audio.tags is not None:
@@ -350,14 +356,23 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
                 elif hasattr(audio.tags, "__setitem__"):
                     audio.tags["RATING"] = [rating_100]
                 audio.save()
-                _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (Generic RATING={rating_100}, ★{rating}): {file_path}")
-                return True
+                msg = f"音源タグに RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
+                _safe_log(f"✅ [Tagger] {msg}")
+                return True, msg
+            else:
+                msg = f"タグ構造に対応していないフォーマットです: {ext}"
+                _safe_log(f"⚠️ [Tagger] {msg}")
+                return False, msg
 
+    except PermissionError as pe:
+        msg = f"NASファイルへの書き込み権限がありません (Permission denied): {pe}"
+        _safe_log(f"❌ [Tagger] {msg}")
+        return False, msg
     except Exception as e:
-        _safe_log(f"❌ [Tagger] NAS音源タグ書き込みエラー ({file_path}): {e}")
+        msg = f"ファイルタグ書き込み例外エラー ({file_path}): {e}"
+        _safe_log(f"❌ [Tagger] {msg}")
         traceback.print_exc()
-
-    return False
+        return False, msg
 
 
 def read_rating_from_file(file_path: str) -> Optional[int]:
@@ -401,7 +416,6 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                 tags_obj = audio.tags if (audio and hasattr(audio, "tags")) else None
 
             if tags_obj:
-                # POPM フレームの確認
                 popm_frames = []
                 if hasattr(tags_obj, "getall"):
                     popm_frames.extend(tags_obj.getall("POPM"))
@@ -424,7 +438,6 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                         elif r >= 1:
                             return 1
 
-                # TXXX:RATING の確認
                 txxx_frames = []
                 if hasattr(tags_obj, "getall"):
                     txxx_frames.extend(tags_obj.getall("TXXX:RATING"))
@@ -464,7 +477,7 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                     if 1 <= r <= 5:
                         return r
                     elif r in (20, 40, 60, 80, 100):
-                        return r // 20
+                        return num // 20
 
     except Exception:
         pass

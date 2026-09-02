@@ -417,9 +417,9 @@ ProcessCommand --> Idle : 処理実行・返答
 
 #### 2. 音源ファイル本体タグへの書き込み仕様 (`tagger.py`)
 - **NAS 実ファイルパスの直接解決 (`resolve_audio_file_path`)**:
-  - Jetson Orin Nano Super では、NAS のデータ（`\\homenas\music\` や `\\home\music\`）が `/mnt/music/` 配下にマウントされています。
-  - `music_meta.db` に記録されている `file_path`（`\\homenas\music\Artist\Album\01.flac` 等）や `relative_path`（`Artist/Album/01.flac`）をもとに、**最優先で `/mnt/music/<relative_path>` に直接アクセスしてタグを書き換えます**。
-  - Windows 環境では UNC パス（`\\homenas\music\...`）で直接書き換えます。
+- **エラーハンドリングと失敗通知**:
+  - 音源ファイルへのタグ書き込みに失敗した場合（ファイル非存在、Sambaマウント書き込み権限なし等）、Web UI のトースト通知およびコンソールログに **具体的な失敗原因（Permission denied、探索パス等）を明示的に赤色警告で通知** します。
+  - **診断スクリプト (`diagnose_rating.py`)**: Jetson 上で音源ファイルのマウント状況およびタグ書き込み権限をワンコマンドで診断・テストできるスクリプトを同梱。
 - **フォーマット別タグ仕様 (Windows / moOde / foobar2000 最大互換)**:
   - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` に `"20"`, `"40"`, `"60"`, `"80"`, `"100"`（★1〜5: Windows/foobar2000標準）を保存。さらに `RATING_5` (`"1"`〜`"5"`), `RATING_PERCENT`, `RATING:no@email` を同時付与。
   - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter: 1, 64, 128, 196, 255) ＋ `TXXX:RATING` (`"60"`, `"80"`, `"100"`) ＋ `TXXX:Rating WMP` (`"1"`〜`"5"`) を同時保存。

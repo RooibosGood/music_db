@@ -2530,13 +2530,17 @@
         if (data && data.success) {
           updateRatingUI(data.rating, data.title);
           const icon = action === 'good' ? '👍' : '👎';
-          showToast(`${icon} 『${data.title}』を ★${data.rating} に評価しました`);
+          if (data.tag_written === false) {
+            showToast(`⚠️ 『${data.title}』(★${data.rating}): ${data.tag_msg || '音源タグの書き込みに失敗しました'}`);
+          } else {
+            showToast(`${icon} 『${data.title}』を ★${data.rating} に評価しました（音源タグ保存完了）`);
+          }
         } else {
-          showToast('⚠️ ' + (data.message || '評価の更新に失敗しました'));
+          showToast('❌ ' + (data.message || '評価の更新に失敗しました'));
         }
       } catch (err) {
         console.error('Rating error:', err);
-        showToast('⚠️ 評価送信エラー');
+        showToast('❌ 評価送信エラー: ' + err.message);
       } finally {
         setTimeout(() => { isRatingProcessing = false; }, 300);
       }
@@ -2562,12 +2566,17 @@
         const data = await res.json();
         if (data && data.success) {
           updateRatingUI(data.rating, data.title);
-          showToast(`⭐ 『${data.title}』を ★${data.rating} に評価しました`);
+          if (data.tag_written === false) {
+            showToast(`⚠️ 『${data.title}』(★${data.rating}): ${data.tag_msg || '音源タグの書き込みに失敗しました'}`);
+          } else {
+            showToast(`⭐ 『${data.title}』を ★${data.rating} に評価しました（音源タグ保存完了）`);
+          }
         } else {
-          showToast('⚠️ ' + (data.message || '評価の更新に失敗しました'));
+          showToast('❌ ' + (data.message || '評価の更新に失敗しました'));
         }
       } catch (err) {
         console.error('Star rating error:', err);
+        showToast('❌ 評価送信エラー: ' + err.message);
       } finally {
         setTimeout(() => { isRatingProcessing = false; }, 300);
       }
