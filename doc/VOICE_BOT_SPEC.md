@@ -420,10 +420,22 @@ ProcessCommand --> Idle : 処理実行・返答
 - **エラーハンドリングと失敗通知**:
   - 音源ファイルへのタグ書き込みに失敗した場合（ファイル非存在、Sambaマウント書き込み権限なし等）、Web UI のトースト通知およびコンソールログに **具体的な失敗原因（Permission denied、探索パス等）を明示的に赤色警告で通知** します。
   - **診断スクリプト (`diagnose_rating.py`)**: Jetson 上で音源ファイルのマウント状況およびタグ書き込み権限をワンコマンドで診断・テストできるスクリプトを同梱。
-- **フォーマット別タグ仕様 (Windows / moOde / foobar2000 最大互換)**:
-  - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` に `"20"`, `"40"`, `"60"`, `"80"`, `"100"`（★1〜5: Windows/foobar2000標準）を保存。さらに `RATING_5` (`"1"`〜`"5"`), `RATING_PERCENT`, `RATING:no@email` を同時付与。
-  - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter: 1, 64, 128, 196, 255) ＋ `TXXX:RATING` (`"60"`, `"80"`, `"100"`) ＋ `TXXX:Rating WMP` (`"1"`〜`"5"`) を同時保存。
-  - **M4A / AAC / ALAC**: MP4 atom `----:com.apple.iTunes:RATING` / `rate` に `20, 40, 60, 80, 100` を保存。
+- **フォーマット別タグ仕様 (Windows / Mp3tag / foobar2000 / MusicBee / moOde 最大互換マルチタギング)**:
+  - **FLAC / OGG / OPUS (Vorbis Comment)**:
+    - `RATING`: `"20"`, `"40"`, `"60"`, `"80"`, `"100"`（100点スケール標準）
+    - `RATING WMP`: `"1"`, `"2"`, `"3"`, `"4"`, `"5"`（Mp3tag / WMP 列用）
+    - `WM/SharedUserRating`: `"1"`, `"25"`, `"50"`, `"75"`, `"99"`（Windows Media / シェル互換）
+    - `RATING:Windows Media Player 9 Series`, `RATING:no@email`, `RATING_PERCENT`, `RATING_5`, `RATING MM` を全網羅付与。
+  - **MP3 / WAV / AIFF (ID3v2.3)**:
+    - ID3v2.3 `POPM` (Popularimeter: `Windows Media Player 9 Series` / `no@email` に対し 1, 64, 128, 196, 255)
+    - `TXXX:RATING` (`"60"`, `"80"`, `"100"`)
+    - `TXXX:Rating WMP` (`"1"`〜`"5"`)
+    - `TXXX:WM/SharedUserRating` (`"1"`〜`"99"`) を同時保存。
+  - **M4A / AAC / ALAC (MP4 Atoms)**:
+    - `----:com.apple.iTunes:RATING` (`20`〜`100`)
+    - `----:com.apple.iTunes:Rating WMP` (`1`〜`5`)
+    - `----:com.apple.iTunes:WM/SharedUserRating` (`1`〜`99`)
+    - `rate` (`20`〜`100`) を保存。
 
 ### 5.9 ReplayGain 反映待機と選曲・アナウンス・再生シーケンス制御
 

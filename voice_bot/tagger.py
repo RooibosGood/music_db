@@ -2,6 +2,7 @@
 
 mutagen を用いて、FLAC / MP3 / M4A / AAC / OGG / WAV / AIFF / DSF 等の各種音源ファイルの
 メタデータ欄（Vorbis Comment, ID3 POPM/TXXX, MP4 atoms）にレーティング（★1〜5）を直接読み書きします。
+Mp3tag、foobar2000、MusicBee、MediaMonkey、Windows Media Player、moOde との最大互換性を確保しています。
 
 【Jetson / NAS パスマッピング仕様】
 - Jetson Orin Nano Super では、NAS のデータが `/mnt/music/` にマウントされています。
@@ -221,17 +222,27 @@ def resolve_audio_file_path(
 def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
     """NAS上の音楽ファイル自体のメタデータタグにレーティング（★1〜5）を直接書き込む。
 
-    【フォーマット別タグ仕様・Windows / moOde / foobar2000 最大互換】
-    - FLAC / OGG / OPUS:
-      - Vorbis Comment `RATING`: "20", "40", "60", "80", "100" (★1〜5: Windows/foobar2000標準)
-      - `RATING:no@email` / `RATING_PERCENT`: "20"〜"100"
+    【フォーマット別タグ仕様・Windows / Mp3tag / foobar2000 / moOde 最大互換マルチタギング】
+    - FLAC / OGG / OPUS (Vorbis Comment):
+      - `RATING`: "20", "40", "60", "80", "100" (★1〜5: 100点スケール標準)
+      - `RATING WMP`: "1", "2", "3", "4", "5" (Mp3tag / WMP 列用)
+      - `WM/SharedUserRating`: "1", "25", "50", "75", "99" (Windows Media / シェル互換)
+      - `RATING:Windows Media Player 9 Series`: "20"〜"100"
+      - `RATING:no@email`: "20"〜"100"
+      - `RATING_PERCENT`: "20"〜"100"
       - `RATING_5`: "1"〜"5"
-    - MP3 / WAV / AIFF:
-      - ID3v2 `POPM` (Windows Media Player 9 Series): 1, 64, 128, 196, 255
-      - ID3v2 `POPM` (no@email): 1, 64, 128, 196, 255
-      - `TXXX:RATING`: "60", "80", "100" / `TXXX:Rating WMP`: "3", "4", "5"
-    - M4A / AAC / ALAC:
-      - MP4 atom `----:com.apple.iTunes:RATING` / `rate`: 20, 40, 60, 80, 100
+      - `RATING MM`: "20"〜"100"
+    - MP3 / WAV / AIFF (ID3v2.3):
+      - ID3v2.3 `POPM` (Windows Media Player 9 Series): 1, 64, 128, 196, 255 (★1〜5)
+      - ID3v2.3 `POPM` (no@email): 1, 64, 128, 196, 255
+      - `TXXX:RATING`: "60", "80", "100"
+      - `TXXX:Rating WMP`: "1", "2", "3", "4", "5"
+      - `TXXX:WM/SharedUserRating`: "1", "25", "50", "75", "99"
+    - M4A / AAC / ALAC (MP4 Atoms):
+      - `----:com.apple.iTunes:RATING`: "20"〜"100"
+      - `----:com.apple.iTunes:Rating WMP`: "1"〜"5"
+      - `----:com.apple.iTunes:WM/SharedUserRating`: "1"〜"99"
+      - `rate`: 20, 40, 60, 80, 100
 
     Args:
         file_path: 対象の音楽ファイルパス (例: /mnt/music/Artist/Album/01.flac)
@@ -257,6 +268,11 @@ def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
     rating = max(1, min(5, int(rating)))
     rating_100 = str(rating * 20)  # 20, 40, 60, 80, 100
     rating_5 = str(rating)         # 1, 2, 3, 4, 5
+    
+    # Windows Media / Explorer 互換 (WM/SharedUserRating スケール: 1, 25, 50, 75, 99)
+    wm_map = {1: "1", 2: "25", 3: "50", 4: "75", 5: "99"}
+    wm_val = wm_map.get(rating, "50")
+
     ext = os.path.splitext(file_path)[1].lower()
 
     # ファイルのパーミッション確認・書き込み権限の付与試行
@@ -267,19 +283,24 @@ def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
         pass
 
     try:
-        # 1. FLAC
+        # 1. FLAC (Vorbis Comment)
         if ext == ".flac":
             audio = FLAC(file_path)
+            # 各種プレイヤー・タグ管理ツール用フィールドを全網羅
             audio["RATING"] = [rating_100]
+            audio["RATING WMP"] = [rating_5]
+            audio["WM/SharedUserRating"] = [wm_val]
+            audio["RATING:Windows Media Player 9 Series"] = [rating_100]
             audio["RATING:no@email"] = [rating_100]
             audio["RATING_PERCENT"] = [rating_100]
             audio["RATING_5"] = [rating_5]
+            audio["RATING MM"] = [rating_100]
             audio.save()
-            msg = f"FLAC タグに RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
+            msg = f"FLAC タグに RATING={rating_100}, Rating WMP={rating_5}, WM/SharedUserRating={wm_val} (★{rating}) を書き込みました ({file_path})"
             _safe_log(f"✅ [Tagger] {msg}")
             return True, msg
 
-        # 2. MP3
+        # 2. MP3 (ID3v2.3)
         elif ext == ".mp3":
             popm_map = {1: 1, 2: 64, 3: 128, 4: 196, 5: 255}
             popm_val = popm_map.get(rating, 128)
@@ -291,6 +312,7 @@ def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
             txxx_frames = [
                 TXXX(desc="RATING", text=[rating_100]),
                 TXXX(desc="Rating WMP", text=[rating_5]),
+                TXXX(desc="WM/SharedUserRating", text=[wm_val]),
                 TXXX(desc="POPM", text=[str(popm_val)]),
             ]
 
@@ -301,7 +323,8 @@ def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
                 audio.tags.setall("POPM", popm_frames)
                 for t in txxx_frames:
                     audio.tags.setall(f"TXXX:{t.desc}", [t])
-                audio.save()
+                # Windows Explorer 最適化のため ID3v2.3 で保存
+                audio.save(v2_version=3)
             except Exception:
                 try:
                     id3_tags = ID3(file_path)
@@ -310,23 +333,25 @@ def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
                 id3_tags.setall("POPM", popm_frames)
                 for t in txxx_frames:
                     id3_tags.setall(f"TXXX:{t.desc}", [t])
-                id3_tags.save(file_path)
+                id3_tags.save(file_path, v2_version=3)
 
-            msg = f"MP3 ID3 タグに POPM={popm_val}, RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
+            msg = f"MP3 ID3v2.3 タグに POPM={popm_val}, RATING={rating_100}, Rating WMP={rating_5} (★{rating}) を書き込みました ({file_path})"
             _safe_log(f"✅ [Tagger] {msg}")
             return True, msg
 
-        # 3. M4A / MP4 / AAC / ALAC
+        # 3. M4A / MP4 / AAC / ALAC (MP4 Atoms)
         elif ext in (".m4a", ".mp4", ".m4p", ".aac", ".alac"):
             audio = MP4(file_path)
             itunes_rate = rating * 20
             audio["----:com.apple.iTunes:RATING"] = [str(itunes_rate).encode("utf-8")]
+            audio["----:com.apple.iTunes:Rating WMP"] = [rating_5.encode("utf-8")]
+            audio["----:com.apple.iTunes:WM/SharedUserRating"] = [wm_val.encode("utf-8")]
             try:
                 audio["rate"] = [itunes_rate]
             except Exception:
                 pass
             audio.save()
-            msg = f"MP4 タグに RATING={itunes_rate} (★{rating}) を書き込みました ({file_path})"
+            msg = f"MP4 タグに RATING={itunes_rate}, Rating WMP={rating_5} (★{rating}) を書き込みました ({file_path})"
             _safe_log(f"✅ [Tagger] {msg}")
             return True, msg
 
@@ -337,10 +362,12 @@ def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
             else:
                 audio = OggVorbis(file_path)
             audio["RATING"] = [rating_100]
+            audio["RATING WMP"] = [rating_5]
+            audio["WM/SharedUserRating"] = [wm_val]
             audio["RATING:no@email"] = [rating_100]
             audio["RATING_5"] = [rating_5]
             audio.save()
-            msg = f"Ogg/Opus タグに RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
+            msg = f"Ogg/Opus タグに RATING={rating_100}, Rating WMP={rating_5} (★{rating}) を書き込みました ({file_path})"
             _safe_log(f"✅ [Tagger] {msg}")
             return True, msg
 
@@ -353,8 +380,10 @@ def write_rating_to_file(file_path: str, rating: int) -> Tuple[bool, str]:
                     popm_val = popm_map.get(rating, 128)
                     audio.tags.setall("POPM", [POPM(email="Windows Media Player 9 Series", rating=popm_val, count=0)])
                     audio.tags.setall("TXXX:RATING", [TXXX(desc="RATING", text=[rating_100])])
+                    audio.tags.setall("TXXX:Rating WMP", [TXXX(desc="Rating WMP", text=[rating_5])])
                 elif hasattr(audio.tags, "__setitem__"):
                     audio.tags["RATING"] = [rating_100]
+                    audio.tags["RATING WMP"] = [rating_5]
                 audio.save()
                 msg = f"音源タグに RATING={rating_100} (★{rating}) を書き込みました ({file_path})"
                 _safe_log(f"✅ [Tagger] {msg}")
@@ -390,7 +419,7 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
         if ext in (".flac", ".ogg", ".oga", ".opus"):
             audio = MutagenFile(file_path)
             if audio and hasattr(audio, "tags") and audio.tags:
-                for k in ["RATING", "rating", "Rating", "RATING:no@email", "RATING_PERCENT", "RATING_5"]:
+                for k in ["RATING WMP", "rating wmp", "RATING", "rating", "Rating", "WM/SharedUserRating", "RATING:no@email", "RATING_PERCENT", "RATING_5"]:
                     if k in audio.tags:
                         val = str(audio.tags[k][0]).strip()
                         if val.isdigit():
@@ -399,6 +428,10 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                                 return num
                             elif num in (20, 40, 60, 80, 100):
                                 return num // 20
+                            elif num in (1, 25, 50, 75, 99):
+                                # WM/SharedUserRating 変換
+                                wm_rev = {1: 1, 25: 2, 50: 3, 75: 4, 99: 5}
+                                return wm_rev.get(num, max(1, min(5, round(num / 20))))
                             elif num > 0:
                                 return max(1, min(5, round(num / 20)))
 
@@ -440,11 +473,12 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
 
                 txxx_frames = []
                 if hasattr(tags_obj, "getall"):
-                    txxx_frames.extend(tags_obj.getall("TXXX:RATING"))
                     txxx_frames.extend(tags_obj.getall("TXXX:Rating WMP"))
+                    txxx_frames.extend(tags_obj.getall("TXXX:RATING"))
+                    txxx_frames.extend(tags_obj.getall("TXXX:WM/SharedUserRating"))
                 if hasattr(tags_obj, "values"):
                     for v in tags_obj.values():
-                        if isinstance(v, TXXX) and getattr(v, "desc", "") in ("RATING", "Rating WMP") and v not in txxx_frames:
+                        if isinstance(v, TXXX) and getattr(v, "desc", "") in ("RATING", "Rating WMP", "WM/SharedUserRating") and v not in txxx_frames:
                             txxx_frames.append(v)
 
                 for t in txxx_frames:
@@ -456,21 +490,28 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                                 return num
                             elif num in (20, 40, 60, 80, 100):
                                 return num // 20
+                            elif num in (1, 25, 50, 75, 99):
+                                wm_rev = {1: 1, 25: 2, 50: 3, 75: 4, 99: 5}
+                                return wm_rev.get(num, max(1, min(5, round(num / 20))))
 
         # 3. MP4 / M4A
         elif ext in (".m4a", ".mp4", ".aac", ".alac"):
             audio = MP4(file_path)
-            if "----:com.apple.iTunes:RATING" in audio:
-                val = audio["----:com.apple.iTunes:RATING"][0]
-                if isinstance(val, bytes):
-                    val = val.decode("utf-8", errors="ignore")
-                val_str = str(val).strip()
-                if val_str.isdigit():
-                    num = int(val_str)
-                    if 1 <= num <= 5:
-                        return num
-                    elif num in (20, 40, 60, 80, 100):
-                        return num // 20
+            for atom_key in ["----:com.apple.iTunes:Rating WMP", "----:com.apple.iTunes:RATING", "----:com.apple.iTunes:WM/SharedUserRating"]:
+                if atom_key in audio:
+                    val = audio[atom_key][0]
+                    if isinstance(val, bytes):
+                        val = val.decode("utf-8", errors="ignore")
+                    val_str = str(val).strip()
+                    if val_str.isdigit():
+                        num = int(val_str)
+                        if 1 <= num <= 5:
+                            return num
+                        elif num in (20, 40, 60, 80, 100):
+                            return num // 20
+                        elif num in (1, 25, 50, 75, 99):
+                            wm_rev = {1: 1, 25: 2, 50: 3, 75: 4, 99: 5}
+                            return wm_rev.get(num, max(1, min(5, round(num / 20))))
             if "rate" in audio:
                 r = audio["rate"][0]
                 if isinstance(r, int):
