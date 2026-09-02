@@ -218,6 +218,7 @@ def run_track_watcher_loop():
             broadcast_event({"type": "chat_message", "message": msg_record})
 
             # 3. 発話を実行（排他ロックで安全に発話）
+            switch_time = time.time()
             if config.ANNOUNCE_LANGUAGE == "en":
                 broadcast_process_status("tts", f"🎙️ DJ曲紹介アナウンス中: {t_title}")
                 tts.speak_english(announce_text)
@@ -225,7 +226,13 @@ def run_track_watcher_loop():
                 broadcast_process_status("tts", f"🎙️ 曲紹介アナウンス中: {t_title}")
                 tts.speak(announce_text)
 
-            # 4. 発話完了後に音楽再生を再開
+            # 4. 発話完了後に ReplayGain 反映待ち時間を確保して音楽再生を再開
+            elapsed = time.time() - switch_time
+            remaining_delay = max(0.0, config.PLAY_DELAY_SEC - elapsed)
+            if remaining_delay > 0.1:
+                broadcast_process_status("playing", f"⏳ ReplayGain 適用待機中 ({remaining_delay:.1f}秒)...")
+                time.sleep(remaining_delay)
+
             mpd_cli = mpd_client.get_mpd_client()
             if mpd_cli:
                 try:
@@ -233,7 +240,7 @@ def run_track_watcher_loop():
                     mpd_cli.play()
                     mpd_cli.close()
                     mpd_cli.disconnect()
-                    print("▶️ [moOde] 2曲目の曲紹介完了後に音楽再生を再開しました。", flush=True)
+                    print("▶️ [moOde] 曲紹介完了後に音楽再生を再開しました。", flush=True)
                     broadcast_status()
                 except Exception as e:
                     print(f"⚠️ [moOde] 再生再開エラー: {e}")

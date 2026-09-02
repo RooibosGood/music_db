@@ -122,3 +122,6 @@ ReplayGain タグが付加された楽曲は、以下の対応プレイヤー等
 - **MusicBee / foobar2000 / AIMP**: 設定で ReplayGain を有効化
 - **Volumio / MoOde Audio / MPD**: 設定の ReplayGain モード（Album / Track）を有効化
 - **LMS (Lyrion Music Server / Squeezebox)**: ReplayGain 設定でスマートゲインを有効化
+
+### 6.1 `voice_bot` (Jetson 音声AIボット) との連携
+moOde / MPD で ReplayGain タグのゲイン値が正確に読み込まれてオーディオ出力に反映されるまでの時間を確保するため、`voice_bot` では曲選択（キュー投入・選曲・曲送り）から **3秒間の待機時間 (`PLAY_DELAY_SEC = 3.0`)** を設けてから音楽再生を開始する安全設計を採用しています。

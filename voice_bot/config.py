@@ -14,6 +14,7 @@ DEMO_MODE: bool = False  # moOde実機なしで選曲・再生・解説・ステ
 # ==================== moOde / MPD 設定 ====================
 MOODE_IP: str = "192.168.68.198"  # moOde (Raspberry Pi 5) の IP アドレス
 MOODE_PORT: int = 6600
+PLAY_DELAY_SEC: float = 3.0  # 曲選択から再生開始までの待機時間（ReplayGainタグ反映待ち）
 
 # ==================== 音声合成 / LLM 設定 ====================
 VOICEVOX_URL: str = "http://localhost:50021"
@@ -67,7 +68,7 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
     import json
     import os
 
-    global DEMO_MODE, MOODE_IP, MOODE_PORT, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
+    global DEMO_MODE, MOODE_IP, MOODE_PORT, PLAY_DELAY_SEC, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
     global ANNOUNCE_LANGUAGE, ENGLISH_VOICE, AUDIO_OUTPUT_NAME, AUDIO_OUTPUT_DEV
     global VOICE_PRE_SILENCE_SEC, INPUT_DEVICE_NAME, INPUT_DEVICE_INDEX
     global ENABLE_DAILY_INFO, WEATHER_CITY, WEATHER_CITY_JA, WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_TIMEZONE
@@ -110,6 +111,10 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
             MOODE_IP = str(moode_cfg["ip"])
         if "port" in moode_cfg:
             MOODE_PORT = int(moode_cfg["port"])
+        if "play_delay_sec" in moode_cfg:
+            PLAY_DELAY_SEC = float(moode_cfg["play_delay_sec"])
+        elif "play_delay_sec" in data:
+            PLAY_DELAY_SEC = float(data["play_delay_sec"])
 
         # LLM 設定
         llm_cfg = data.get("llm", {})
@@ -184,6 +189,7 @@ def get_current_settings() -> dict:
         "moode": {
             "ip": MOODE_IP,
             "port": MOODE_PORT,
+            "play_delay_sec": PLAY_DELAY_SEC,
         },
         "announcement": {
             "language": ANNOUNCE_LANGUAGE,
@@ -223,7 +229,7 @@ def save_config_to_file(updates: dict) -> bool:
     import json
     import os
 
-    global DEMO_MODE, MOODE_IP, MOODE_PORT, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
+    global DEMO_MODE, MOODE_IP, MOODE_PORT, PLAY_DELAY_SEC, VOICEVOX_URL, LLAMA_CPP_CHAT_URL, SPEAKER_ID, LLM_MODEL
     global ANNOUNCE_LANGUAGE, ENGLISH_VOICE, AUDIO_OUTPUT_NAME, AUDIO_OUTPUT_DEV
     global VOICE_PRE_SILENCE_SEC, INPUT_DEVICE_NAME, INPUT_DEVICE_INDEX
     global ENABLE_DAILY_INFO, WEATHER_CITY, WEATHER_CITY_JA, WEATHER_LATITUDE, WEATHER_LONGITUDE, WEATHER_TIMEZONE
@@ -257,6 +263,9 @@ def save_config_to_file(updates: dict) -> bool:
         if "port" in updates["moode"]:
             MOODE_PORT = int(updates["moode"]["port"])
             moode_cfg["port"] = MOODE_PORT
+        if "play_delay_sec" in updates["moode"]:
+            PLAY_DELAY_SEC = float(updates["moode"]["play_delay_sec"])
+            moode_cfg["play_delay_sec"] = PLAY_DELAY_SEC
         if "demo_mode" in updates["moode"]:
             DEMO_MODE = bool(updates["moode"]["demo_mode"])
             data["demo_mode"] = DEMO_MODE
