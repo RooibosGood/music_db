@@ -9,6 +9,10 @@ from pathlib import Path
 from mutagen import File
 from openai import OpenAI
 try:
+    from voice_bot.tagger import read_rating_from_file
+except ImportError:
+    read_rating_from_file = None
+try:
     from ddgs import DDGS
 except ImportError:
     from duckduckgo_search import DDGS
@@ -183,6 +187,9 @@ def extract_tags(file_path: str):
         is_lossless = ext in ("flac", "wav", "aiff", "alac", "dsd", "dsf", "dff")
         is_hires = 1 if is_lossless and ((sample_rate and sample_rate > 48000) or (bit_depth and bit_depth > 16)) else 0
 
+        # ファイルに既存のRatingタグがあれば読み取る
+        file_rating = read_rating_from_file(file_path) if read_rating_from_file else None
+
         return {
             "title": audio.get("title", [Path(file_path).stem])[0],
             "artist": audio.get("artist", ["Unknown"])[0],
@@ -192,7 +199,8 @@ def extract_tags(file_path: str):
             "sample_rate": sample_rate,
             "bit_depth": bit_depth,
             "duration_seconds": duration_seconds,
-            "is_hires": is_hires
+            "is_hires": is_hires,
+            "rating": file_rating
         }
     except Exception as e:
         print(f"\n[Error] タグ抽出中にエラーが発生しました: {file_path}")
@@ -522,9 +530,9 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                     file_path, relative_path, file_format, is_hires, sample_rate, bit_depth, duration_seconds,
                     title, artist, title_en, artist_en, album,
                     release_year, music_category, genre, mood, energy_level, composer, performers,
-                    description_ja, description_en
+                    description_ja, description_en, rating
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     full_path,
                     rel_path,
@@ -546,7 +554,8 @@ def process_music_library(limit: int = None, reset: bool = False, target_format:
                     meta.get("composer"),
                     meta.get("performers"),
                     meta.get("description_ja"),
-                    meta.get("description_en")
+                    meta.get("description_en"),
+                    tags.get("rating")
                 ))
                 conn.commit()
                 processed_count += 1

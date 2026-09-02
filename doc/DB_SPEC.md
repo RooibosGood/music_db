@@ -95,6 +95,12 @@
   - **未評価時 ＋ バッド👎** ➔ **★２ (`rating = 2`)**
   - **評価済み時 ＋ グッド👍** ➔ **★を＋1**（最大値: ★5）
   - **評価済み時 ＋ バッド👎** ➔ **★を−1**（最小値: ★1）
+- **音源ファイル本体タグへの直接同期書き込み**:
+  評価更新時は、データベースの `rating` カラムだけでなく、音源ファイル本体（FLAC, MP3, M4A, OGG等）のメタデータ欄にも直接評価タグを書き込み保存します（`voice_bot/tagger.py`）。
+  - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` (`"1"`〜`"5"`)
+  - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter: 1, 64, 128, 196, 255) ＋ `TXXX:RATING` (`"1"`〜`"5"`)
+  - **M4A / AAC / ALAC**: MP4 atom `----:com.apple.iTunes:RATING` / `rate` (20, 40, 60, 80, 100)
+  - ※ライブラリ初期構築時（`build_music_db.py`）も、音源ファイル本体に既存の Rating タグがあれば自動的に初期値として取り込まれます。
 
 ### 3.6 `description_ja` / `description_en`（日本語解説文 / 英語解説文）
 Web検索結果および音源タグ情報を元に、ローカルLLMが生成した解説文（1〜2文）です。楽曲の背景、代表曲としての位置づけ、特徴などが記述されており、検索UIでの表示やAIによる楽曲紹介、英語DJモード、RAG（Retrieval-Augmented Generation）に活用できます。

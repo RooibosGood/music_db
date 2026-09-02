@@ -11,6 +11,8 @@ import re
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+from . import tagger
+
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "music_meta.db")
 
 # ランダム選曲の重複防止用（直近に再生した楽曲IDを保持）
@@ -218,7 +220,18 @@ def update_track_rating(
             else:
                 new_rating = max(1, int(current_rating) - 1)
 
-        # DB 更新
+        # 1. 音楽ファイル自体へのメタデータタグ書き込み (FLAC/MP3/M4A等)
+        raw_file_path = row["file_path"]
+        raw_rel_path = row["relative_path"]
+        real_file_path = tagger.resolve_audio_file_path(raw_file_path, raw_rel_path)
+        tag_written = False
+
+        if real_file_path:
+            tag_written = tagger.write_rating_to_file(real_file_path, new_rating)
+        else:
+            print(f"ℹ️ [Rating Update] 実ファイルパスが見つからないためタグ書き込みをスキップ: {raw_file_path or raw_rel_path}", flush=True)
+
+        # 2. DB 更新
         target_id = row["id"]
         cur.execute("UPDATE tracks SET rating = ? WHERE id = ?;", (new_rating, target_id))
         conn.commit()
@@ -229,7 +242,7 @@ def update_track_rating(
         artist_str = f"（{track_artist}）" if track_artist and track_artist != "Unknown" else ""
 
         print(
-            f"⭐ [Rating Update] 『{track_title}』{artist_str} の評価を更新: {old_rating} ➔ ★{new_rating} (action={action})",
+            f"⭐ [Rating Update] 『{track_title}』{artist_str} の評価を更新: {old_rating} ➔ ★{new_rating} (action={action}, file_tagged={tag_written})",
             flush=True,
         )
 
@@ -239,6 +252,8 @@ def update_track_rating(
             "title": track_title,
             "artist": track_artist,
             "file": row["relative_path"] or row["file_path"],
+            "real_file_path": real_file_path,
+            "tag_written": tag_written,
             "old_rating": old_rating,
             "rating": new_rating,
             "action": action,
