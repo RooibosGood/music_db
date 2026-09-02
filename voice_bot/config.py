@@ -1,5 +1,6 @@
 """moOde 音声ボット設定モジュール。"""
 
+import os
 from typing import Optional, Tuple
 
 try:
@@ -15,7 +16,7 @@ DEMO_MODE: bool = False  # moOde実機なしで選曲・再生・解説・ステ
 MOODE_IP: str = "192.168.68.198"  # moOde (Raspberry Pi 5) の IP アドレス
 MOODE_PORT: int = 6600
 PLAY_DELAY_SEC: float = 3.0  # 曲選択から再生開始までの待機時間（ReplayGainタグ反映待ち）
-MUSIC_DIR: Optional[str] = None  # NAS/音源ディレクトリのローカルマウント先（例: "/mnt/nas_music", "/mnt/nas/music", "\\\\homenas\\music"）
+MUSIC_DIR: Optional[str] = "/mnt/music" if os.name != "nt" else None  # Jetson上のNASマウント先（デフォルト: /mnt/music）
 
 # ==================== 音声合成 / LLM 設定 ====================
 VOICEVOX_URL: str = "http://localhost:50021"

@@ -2,8 +2,11 @@
 
 mutagen を用いて、FLAC / MP3 / M4A / AAC / OGG / WAV / AIFF / DSF 等の各種音源ファイルの
 メタデータ欄（Vorbis Comment, ID3 POPM/TXXX, MP4 atoms）にレーティング（★1〜5）を直接読み書きします。
-music_meta.db に記録されている NAS パス（\\homenas\\music\\...）や相対パスを自動解決し、
-Windows / Linux (Jetson) / moOde の環境差を吸収して直接 NAS 音源ファイルを書き換えます。
+
+【Jetson / NAS パスマッピング仕様】
+- Jetson Orin Nano Super では、NAS のデータが `/mnt/music/` にマウントされています。
+- music_meta.db に記録されている `\\homenas\\music\\...` や `\\home\\music\\...` のパスを、
+  Jetson 上の実パス `/mnt/music/...` に直接マッピングして NAS 音源ファイルのタグを更新します。
 """
 import os
 import re
@@ -32,12 +35,13 @@ except ImportError:
 
 
 # Jetson (Linux) / Windows で想定される音楽ディレクトリのプレフィックス候補
+# ユーザー指定の /mnt/music を最優先候補として定義
 STATIC_SEARCH_BASE_DIRS: List[str] = [
-    # Linux / Jetson / moOde マウント先
+    # Linux / Jetson マウント先 (最優先: /mnt/music)
+    "/mnt/music",
     "/mnt/nas/music",
     "/mnt/nas_music",
     "/mnt/nas",
-    "/mnt/music",
     "/var/lib/mpd/music/NAS",
     "/var/lib/mpd/music",
     "/mnt/homenas_music",
@@ -49,8 +53,10 @@ STATIC_SEARCH_BASE_DIRS: List[str] = [
     "/home/jetson/music",
     # Windows UNC / ドライブ文字
     r"\\homenas\music",
+    r"\\home\music",
     r"\\homenas\homenas_music",
     r"//homenas/music",
+    r"//home/music",
     r"D:\music",
     r"E:\music",
     r"C:\music",
@@ -80,7 +86,7 @@ def get_system_nas_mount_points() -> List[str]:
                         src, target, fstype = parts[0], parts[1], parts[2]
                         # cifs, smbfs, nfs, sshfs, または homenas / music を含むマウント
                         is_nas_fs = fstype in ("cifs", "smbfs", "nfs", "nfs4", "fuse", "fuse.rclone")
-                        is_nas_path = "homenas" in src.lower() or "music" in target.lower() or "nas" in target.lower()
+                        is_nas_path = "homenas" in src.lower() or "home" in src.lower() or "music" in target.lower() or "nas" in target.lower()
                         if is_nas_fs or is_nas_path:
                             if target not in mounts:
                                 mounts.append(target)
@@ -99,82 +105,104 @@ def resolve_audio_file_path(
 ) -> Optional[str]:
     """実在する音楽ファイルへのローカル/UNC絶対パスを探索・解決する。
 
-    music_meta.db の file_path (\\\\homenas\\music\\...) や relative_path (Artist/Album/01.flac)
-    から、Windows UNC パスや Linux/Jetson 上のマウントパスを網羅的に探索して返します。
+    Jetson 上では `/mnt/music/` 配下に `\\homenas\\music\\` (または `\\home\\music\\`) の
+    ファイルツリーが存在することを前提として、最優先で `/mnt/music/<relative_path>` を解決します。
 
     Args:
-        file_path: 登録されている絶対パスまたはURL
-        relative_path: 音楽ライブラリのルートからの相対パス
+        file_path: 登録されている絶対パスまたはURL (例: \\\\homenas\\music\\Artist\\Album\\01.flac)
+        relative_path: 音楽ライブラリのルートからの相対パス (例: Artist/Album/01.flac)
 
     Returns:
         実在が確認できたファイルパス（存在しない場合は None）
     """
-    # 候補リストを生成
-    base_dirs = []
-    # 1. config.MUSIC_DIR（設定ファイル・環境変数）
+    # 1. relative_path の正規化 (例: "Artist/Album/01.flac")
+    rel_clean = None
+    if relative_path:
+        rel_clean = relative_path.replace("\\", "/").lstrip("/")
+        # moOde MPD プレフィックス除去
+        for pfx in ("NAS/", "USB/", "SDCARD/", "nas/", "usb/", "sdcard/"):
+            if rel_clean.startswith(pfx):
+                rel_clean = rel_clean[len(pfx):].lstrip("/")
+                break
+
+    # 2. file_path から relative_path を抽出（\\homenas\music\ や \\home\music\, NAS/ の剥離）
+    if file_path and not rel_clean:
+        fp_norm = file_path.replace("\\", "/").lstrip("/")
+        # moOde MPD プレフィックス
+        for pfx in ("NAS/", "USB/", "SDCARD/", "nas/", "usb/", "sdcard/"):
+            if fp_norm.startswith(pfx):
+                fp_norm = fp_norm[len(pfx):].lstrip("/")
+                rel_clean = fp_norm
+                break
+
+        if not rel_clean:
+            for uncpfx in ("homenas/music/", "home/music/", "homenas/homenas_music/", "music/", "//homenas/music/", "//home/music/"):
+                idx = fp_norm.lower().find(uncpfx)
+                if idx != -1:
+                    rel_clean = fp_norm[idx + len(uncpfx):].lstrip("/")
+                    break
+            if not rel_clean:
+                rel_clean = fp_norm
+
+    # 3. 【最優先】Jetson の標準マウント先 /mnt/music との直接結合チェック
+    if rel_clean:
+        mnt_music_path = os.path.normpath(os.path.join("/mnt/music", rel_clean.replace("/", os.sep)))
+        if os.path.isfile(mnt_music_path):
+            return os.path.abspath(mnt_music_path)
+
+    # 4. 【第2優先】config.MUSIC_DIR との結合チェック
     custom_dir = getattr(config, "MUSIC_DIR", None)
+    if custom_dir and rel_clean:
+        custom_path = os.path.normpath(os.path.join(custom_dir, rel_clean.replace("/", os.sep)))
+        if os.path.isfile(custom_path):
+            return os.path.abspath(custom_path)
+
+    # 5. 【第3優先】file_path の直接実在チェック（Windows UNC パス \\homenas\music\... やローカル絶対パス）
+    if file_path and os.path.isfile(file_path):
+        return os.path.abspath(file_path)
+    if file_path:
+        norm = os.path.normpath(file_path)
+        if os.path.isfile(norm):
+            return os.path.abspath(norm)
+
+    # 6. 【第4優先】全マウント候補ディレクトリとの網羅的結合チェック
+    base_dirs = []
     if custom_dir:
         base_dirs.append(custom_dir)
-
-    # 2. Linux /proc/mounts からの自動検出マウントポイント
     base_dirs.extend(get_system_nas_mount_points())
-
-    # 3. 定義済み検索候補
     base_dirs.extend(STATIC_SEARCH_BASE_DIRS)
 
-    # パス候補のバリエーションを収集
-    raw_candidates = []
-    if file_path:
-        raw_candidates.append(file_path)
+    # 重複除去
+    seen_bases = set()
+    unique_bases = []
+    for b in base_dirs:
+        if b and b not in seen_bases:
+            seen_bases.add(b)
+            unique_bases.append(b)
+
+    rel_candidates = []
+    if rel_clean:
+        rel_candidates.append(rel_clean)
     if relative_path:
-        raw_candidates.append(relative_path)
+        rel_candidates.append(relative_path.replace("\\", "/").lstrip("/"))
+    if file_path:
+        rel_candidates.append(file_path.replace("\\", "/").lstrip("/"))
 
-    # 1. 直接実在チェック（Windows UNC パス \\homenas\music\... やローカル絶対パス）
-    for cand in raw_candidates:
-        if cand and os.path.isfile(cand):
-            return os.path.abspath(cand)
-        if cand:
-            norm = os.path.normpath(cand)
-            if os.path.isfile(norm):
-                return os.path.abspath(norm)
-
-    # 2. 相対パスの正規化（NAS/ や USB/ などのプレフィックス除去、Windows UNC プレフィックス除去）
-    rel_variants = set()
-    for cand in raw_candidates:
-        if not cand:
-            continue
-        c_clean = cand.replace("\\", "/").lstrip("/")
-        rel_variants.add(c_clean)
-
-        # moOde MPD プレフィックス除去 (例: "NAS/Artist/Album/01.flac" -> "Artist/Album/01.flac")
-        for pfx in ("NAS/", "USB/", "SDCARD/", "nas/", "usb/", "sdcard/"):
-            if c_clean.startswith(pfx):
-                rel_variants.add(c_clean[len(pfx):].lstrip("/"))
-
-        # Windows UNC プレフィックス除去 (例: "homenas/music/Artist/..." -> "Artist/...")
-        for uncpfx in ("homenas/music/", "homenas/homenas_music/", "music/", "//homenas/music/"):
-            idx = c_clean.lower().find(uncpfx)
-            if idx != -1:
-                rel_variants.add(c_clean[idx + len(uncpfx):].lstrip("/"))
-
-    # 3. base_dirs × rel_variants の組み合わせ探索
-    for base in base_dirs:
-        if not base:
-            continue
-        for rel in rel_variants:
+    for base in unique_bases:
+        for rel in rel_candidates:
             if not rel:
                 continue
             full = os.path.normpath(os.path.join(base, rel.replace("/", os.sep)))
             if os.path.isfile(full):
                 return os.path.abspath(full)
 
-    # 4. カレントディレクトリ基準
-    for rel in rel_variants:
+    # 7. カレントディレクトリ基準
+    for rel in rel_candidates:
         if rel and os.path.isfile(rel):
             return os.path.abspath(rel)
 
-    # 5. ファイル名（basename）単体での探索（カレントまたは base_dirs 直下）
-    for cand in raw_candidates:
+    # 8. ファイル名（basename）単体での探索
+    for cand in [file_path, relative_path]:
         if not cand:
             continue
         fname = os.path.basename(cand.replace("\\", "/"))
@@ -182,8 +210,8 @@ def resolve_audio_file_path(
             continue
         if os.path.isfile(fname):
             return os.path.abspath(fname)
-        for base in base_dirs:
-            if base and os.path.isdir(base):
+        for base in unique_bases:
+            if os.path.isdir(base):
                 direct_file = os.path.join(base, fname)
                 if os.path.isfile(direct_file):
                     return os.path.abspath(direct_file)
@@ -207,7 +235,7 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
       - MP4 atom `----:com.apple.iTunes:RATING` / `rate`: 20, 40, 60, 80, 100
 
     Args:
-        file_path: 対象の音楽ファイルパス (ローカルまたはUNCパス)
+        file_path: 対象の音楽ファイルパス (例: /mnt/music/Artist/Album/01.flac)
         rating: 1〜5 の整数
 
     Returns:
