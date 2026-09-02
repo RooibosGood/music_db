@@ -2,10 +2,12 @@
 
 mutagen を用いて、FLAC / MP3 / M4A / AAC / OGG / WAV / AIFF / DSF 等の各種音源ファイルの
 メタデータ欄（Vorbis Comment, ID3 POPM/TXXX, MP4 atoms）にレーティング（★1〜5）を直接読み書きします。
-Windows エクスプローラー、foobar2000、Mp3tag、moOde、MusicBee との最大互換性を確保しています。
+music_meta.db に記録されている NAS パス（\\homenas\\music\\...）や相対パスを自動解決し、
+Windows / Linux (Jetson) / moOde の環境差を吸収して直接 NAS 音源ファイルを書き換えます。
 """
 import os
 import re
+import traceback
 from typing import Any, Dict, List, Optional
 
 from . import config
@@ -30,22 +32,22 @@ except ImportError:
 
 
 # Jetson (Linux) / Windows で想定される音楽ディレクトリのプレフィックス候補
-SEARCH_BASE_DIRS: List[str] = [
+STATIC_SEARCH_BASE_DIRS: List[str] = [
     # Linux / Jetson / moOde マウント先
-    "/mnt/nas_music",
     "/mnt/nas/music",
+    "/mnt/nas_music",
+    "/mnt/nas",
     "/mnt/music",
     "/var/lib/mpd/music/NAS",
     "/var/lib/mpd/music",
     "/mnt/homenas_music",
     "/mnt/homenas/music",
-    "/mnt/nas",
     "/media/music",
     os.path.expanduser("~/music"),
     "/home/takai/music",
     "/home/orin/music",
     "/home/jetson/music",
-    # Windows
+    # Windows UNC / ドライブ文字
     r"\\homenas\music",
     r"\\homenas\homenas_music",
     r"//homenas/music",
@@ -66,11 +68,39 @@ def _safe_log(msg: str):
             pass
 
 
+def get_system_nas_mount_points() -> List[str]:
+    """Linux システム (/proc/mounts) から NAS / 音楽関連のマウントポイントを自動検出"""
+    mounts = []
+    if os.path.exists("/proc/mounts"):
+        try:
+            with open("/proc/mounts", "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 3:
+                        src, target, fstype = parts[0], parts[1], parts[2]
+                        # cifs, smbfs, nfs, sshfs, または homenas / music を含むマウント
+                        is_nas_fs = fstype in ("cifs", "smbfs", "nfs", "nfs4", "fuse", "fuse.rclone")
+                        is_nas_path = "homenas" in src.lower() or "music" in target.lower() or "nas" in target.lower()
+                        if is_nas_fs or is_nas_path:
+                            if target not in mounts:
+                                mounts.append(target)
+                            # サブディレクトリに music がある場合
+                            sub_music = os.path.join(target, "music")
+                            if os.path.isdir(sub_music) and sub_music not in mounts:
+                                mounts.append(sub_music)
+        except Exception:
+            pass
+    return mounts
+
+
 def resolve_audio_file_path(
     file_path: Optional[str] = None,
     relative_path: Optional[str] = None,
 ) -> Optional[str]:
-    """実在する音楽ファイルへのローカル絶対パスを探索・解決する。
+    """実在する音楽ファイルへのローカル/UNC絶対パスを探索・解決する。
+
+    music_meta.db の file_path (\\\\homenas\\music\\...) や relative_path (Artist/Album/01.flac)
+    から、Windows UNC パスや Linux/Jetson 上のマウントパスを網羅的に探索して返します。
 
     Args:
         file_path: 登録されている絶対パスまたはURL
@@ -85,8 +115,12 @@ def resolve_audio_file_path(
     custom_dir = getattr(config, "MUSIC_DIR", None)
     if custom_dir:
         base_dirs.append(custom_dir)
-    # 2. 定義済み検索候補
-    base_dirs.extend(SEARCH_BASE_DIRS)
+
+    # 2. Linux /proc/mounts からの自動検出マウントポイント
+    base_dirs.extend(get_system_nas_mount_points())
+
+    # 3. 定義済み検索候補
+    base_dirs.extend(STATIC_SEARCH_BASE_DIRS)
 
     # パス候補のバリエーションを収集
     raw_candidates = []
@@ -95,7 +129,7 @@ def resolve_audio_file_path(
     if relative_path:
         raw_candidates.append(relative_path)
 
-    # 1. 直接実在チェック
+    # 1. 直接実在チェック（Windows UNC パス \\homenas\music\... やローカル絶対パス）
     for cand in raw_candidates:
         if cand and os.path.isfile(cand):
             return os.path.abspath(cand)
@@ -117,8 +151,8 @@ def resolve_audio_file_path(
             if c_clean.startswith(pfx):
                 rel_variants.add(c_clean[len(pfx):].lstrip("/"))
 
-        # Windows UNC プレフィックス除去 (例: "//homenas/music/Artist/..." -> "Artist/...")
-        for uncpfx in ("homenas/music/", "homenas/homenas_music/", "music/"):
+        # Windows UNC プレフィックス除去 (例: "homenas/music/Artist/..." -> "Artist/...")
+        for uncpfx in ("homenas/music/", "homenas/homenas_music/", "music/", "//homenas/music/"):
             idx = c_clean.lower().find(uncpfx)
             if idx != -1:
                 rel_variants.add(c_clean[idx + len(uncpfx):].lstrip("/"))
@@ -130,7 +164,6 @@ def resolve_audio_file_path(
         for rel in rel_variants:
             if not rel:
                 continue
-            # そのまま結合
             full = os.path.normpath(os.path.join(base, rel.replace("/", os.sep)))
             if os.path.isfile(full):
                 return os.path.abspath(full)
@@ -159,7 +192,7 @@ def resolve_audio_file_path(
 
 
 def write_rating_to_file(file_path: str, rating: int) -> bool:
-    """音楽ファイル自体のメタデータタグにレーティング（★1〜5）を書き込む。
+    """NAS上の音楽ファイル自体のメタデータタグにレーティング（★1〜5）を直接書き込む。
 
     【フォーマット別タグ仕様・Windows / moOde / foobar2000 最大互換】
     - FLAC / OGG / OPUS:
@@ -174,18 +207,18 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
       - MP4 atom `----:com.apple.iTunes:RATING` / `rate`: 20, 40, 60, 80, 100
 
     Args:
-        file_path: 対象の音楽ファイルパス
+        file_path: 対象の音楽ファイルパス (ローカルまたはUNCパス)
         rating: 1〜5 の整数
 
     Returns:
         書き込み成功時 True、失敗時 False
     """
     if not os.path.isfile(file_path):
-        _safe_log(f"⚠️ [Tagger] ファイルが存在しないため書き込めません: {file_path}")
+        _safe_log(f"❌ [Tagger] 音源ファイルが存在しません: {file_path}")
         return False
 
     if MutagenFile is None:
-        _safe_log(f"⚠️ [Tagger] mutagen がインストールされていないためスキップ: {file_path}")
+        _safe_log(f"⚠️ [Tagger] mutagen が未インストールのためタグ書き込みをスキップ: {file_path}")
         return False
 
     # 1〜5 にクランプ
@@ -211,7 +244,7 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
             audio["RATING_PERCENT"] = [rating_100]
             audio["RATING_5"] = [rating_5]
             audio.save()
-            _safe_log(f"🏷️ [Tagger] FLAC タグに Rating={rating_100} (★{rating}) を書き込みました: {file_path}")
+            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (FLAC RATING={rating_100}, ★{rating}): {file_path}")
             return True
 
         # 2. MP3
@@ -248,7 +281,7 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
                     id3_tags.setall(f"TXXX:{t.desc}", [t])
                 id3_tags.save(file_path)
 
-            _safe_log(f"🏷️ [Tagger] MP3 ID3 (POPM={popm_val}, RATING={rating_100}, ★{rating}) を書き込みました: {file_path}")
+            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (MP3 POPM={popm_val}, RATING={rating_100}, ★{rating}): {file_path}")
             return True
 
         # 3. M4A / MP4 / AAC / ALAC
@@ -261,7 +294,7 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
             except Exception:
                 pass
             audio.save()
-            _safe_log(f"🏷️ [Tagger] MP4 タグに Rating={itunes_rate} (★{rating}) を書き込みました: {file_path}")
+            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (MP4 RATING={itunes_rate}, ★{rating}): {file_path}")
             return True
 
         # 4. Ogg Vorbis / Opus
@@ -274,7 +307,7 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
             audio["RATING:no@email"] = [rating_100]
             audio["RATING_5"] = [rating_5]
             audio.save()
-            _safe_log(f"🏷️ [Tagger] Ogg/Opus タグに Rating={rating_100} (★{rating}) を書き込みました: {file_path}")
+            _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (Ogg/Opus RATING={rating_100}, ★{rating}): {file_path}")
             return True
 
         # 5. その他 (WAV, AIFF, DSF 等、汎用 MutagenFile)
@@ -289,11 +322,12 @@ def write_rating_to_file(file_path: str, rating: int) -> bool:
                 elif hasattr(audio.tags, "__setitem__"):
                     audio.tags["RATING"] = [rating_100]
                 audio.save()
-                _safe_log(f"🏷️ [Tagger] 音源タグに Rating={rating_100} (★{rating}) を書き込みました: {file_path}")
+                _safe_log(f"✅ [Tagger] NAS音源タグ書き込み完了 (Generic RATING={rating_100}, ★{rating}): {file_path}")
                 return True
 
     except Exception as e:
-        _safe_log(f"⚠️ [Tagger] ファイルタグ書き込みエラー ({file_path}): {e}")
+        _safe_log(f"❌ [Tagger] NAS音源タグ書き込みエラー ({file_path}): {e}")
+        traceback.print_exc()
 
     return False
 
@@ -323,7 +357,6 @@ def read_rating_from_file(file_path: str) -> Optional[int]:
                             elif num in (20, 40, 60, 80, 100):
                                 return num // 20
                             elif num > 0:
-                                # 0〜100 のパーセンテージ換算
                                 return max(1, min(5, round(num / 20)))
 
         # 2. MP3 / WAV / AIFF

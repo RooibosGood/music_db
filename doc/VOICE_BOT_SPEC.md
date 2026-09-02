@@ -416,7 +416,10 @@ ProcessCommand --> Idle : 処理実行・返答
   - 指定された数値に設定（1〜5の範囲にクランプ）。
 
 #### 2. 音源ファイル本体タグへの書き込み仕様 (`tagger.py`)
-- **パス探索・解決 (`resolve_audio_file_path`)**: `config.MUSIC_DIR`、Windows/NAS パス (`\\homenas\music\...`) および Linux/Jetson マウントパス (`/mnt/nas_music`, `/mnt/nas/music`, `/var/lib/mpd/music/NAS` 等) を自動探索。moOde の `NAS/` プレフィックスも自動除去して照合。
+- **NAS 実ファイルパスの自動探索・解決 (`resolve_audio_file_path`)**:
+  - `music_meta.db` に記録されている `file_path`（`\\homenas\music\...`）や `relative_path`（`Artist/Album/01.flac`）をもとに、Windows UNC パス（`\\homenas\music\`）または Linux/Jetson 上のマウントパス（`/mnt/nas/music`, `/mnt/nas_music`, `/var/lib/mpd/music/NAS` 等）を探索。
+  - **Linux `/proc/mounts` からの自動検出**: Jetson 上で NAS がどこにマウントされていても（例: `/mnt/nas`, `/mnt/nas/music`, `/media/...`）、`/proc/mounts` を走査してマウントポイントを自動検知して直接アクセスします。
+  - **`setup_nas_mount.sh`**: Jetson 端末上で NAS (`//homenas/music`) を `/mnt/nas/music` に読み書き可能（`rw, 0777`）でマウントするためのセットアップスクリプトを同梱。
 - **フォーマット別タグ仕様 (Windows / moOde / foobar2000 最大互換)**:
   - **FLAC / OGG / OPUS**: Vorbis Comment `RATING` に `"20"`, `"40"`, `"60"`, `"80"`, `"100"`（★1〜5: Windows/foobar2000標準）を保存。さらに `RATING_5` (`"1"`〜`"5"`), `RATING_PERCENT`, `RATING:no@email` を同時付与。
   - **MP3 / WAV / AIFF**: ID3v2 `POPM` (Popularimeter: 1, 64, 128, 196, 255) ＋ `TXXX:RATING` (`"60"`, `"80"`, `"100"`) ＋ `TXXX:Rating WMP` (`"1"`〜`"5"`) を同時保存。

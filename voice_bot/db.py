@@ -259,7 +259,7 @@ def update_track_rating(
         # 1. 音楽ファイル自体へのメタデータタグ書き込み (FLAC/MP3/M4A等)
         raw_file_path = row["file_path"]
         raw_rel_path = row["relative_path"]
-        # 多重候補から探索
+        # 多重候補から探索 (music_meta.db の UNC パス \\homenas\music\... および 相対パス)
         real_file_path = (
             tagger.resolve_audio_file_path(raw_file_path, raw_rel_path)
             or (tagger.resolve_audio_file_path(file_path, None) if file_path else None)
@@ -269,7 +269,11 @@ def update_track_rating(
         if real_file_path:
             tag_written = tagger.write_rating_to_file(real_file_path, new_rating)
         else:
-            print(f"ℹ️ [Rating Update] 実ファイルパスが見つからないためタグ書き込みをスキップ: {raw_file_path or raw_rel_path}", flush=True)
+            print(f"⚠️ [Rating Update] NAS音源ファイルが見つからないためタグ書き込みをスキップしました。", flush=True)
+            print(f"   DB登録パス: {raw_file_path}", flush=True)
+            print(f"   相対パス: {raw_rel_path}", flush=True)
+            print(f"   💡 Jetson 端末上で NAS (//homenas/music) が /mnt/nas/music 等にマウントされているか確認してください:", flush=True)
+            print(f"      bash setup_nas_mount.sh", flush=True)
 
         # 2. DB 更新
         target_id = row["id"]
@@ -286,7 +290,7 @@ def update_track_rating(
             flush=True,
         )
 
-        tag_status_msg = "（ファイルタグにも保存完了）" if tag_written else "（※DBのみ更新）"
+        tag_status_msg = "（NASファイルタグにも保存完了）" if tag_written else "（※DBのみ更新）"
         return {
             "success": True,
             "track_id": target_id,
