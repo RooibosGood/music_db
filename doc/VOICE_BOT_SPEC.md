@@ -272,6 +272,8 @@ moOde の再生中楽曲から `music_meta.db` のレコードを逆引きし、
 | `stop` | - | 停止 (`client.stop()`) |
 | `next` | - | 次のトラックへスキップし、**次の曲の解説文を発話してから再生** |
 | `previous` | - | 前のトラックへスキップし、**前の曲の解説文を発話してから再生** |
+| `rate_good` | - | 再生中楽曲を高評価（**未評価時 ➔ ★3、既評価時 ➔ ★+1**） |
+| `rate_bad` | - | 再生中楽曲を低評価（**未評価時 ➔ ★2、既評価時 ➔ ★-1**） |
 | `volume` | `value` (0〜100) | 音量を設定 (`client.setvol(vol)`) |
 | `unknown` | - | 音楽操作なし（会話応答のみ） |
 
@@ -394,7 +396,23 @@ ProcessCommand --> Idle : 処理実行・返答
 
 #### 2. LLM による自然な音楽オープニングナレーション文生成 (`generate_daily_intro`)
 - 収集した日付・天気・音楽トピック情報を **llama.cpp LLM (`config.LLM_MODEL`)** に渡し、初期挨拶に続く 2〜3文の FM ラジオ DJ / 音楽アシスタント風オープニングトークを自動生成。
-- LLM オフライン時や応答遅延時は、音楽史に即した定型テンプレート合成へ自動フォールバックし、停止することなく確実に案内を発話。
+### 5.8 楽曲評価・レーティング機能 (`db.py`, `mpd_client.py`, `api.py`, `llm.py`)
+
+再生中またはライブラリ内の楽曲に対して、**グッド👍 / バッド👎 ボタン** または **星評価アイコン（★1〜5）の直接選択**、あるいは **音声/チャット操作**（「この曲いいね」「グッド」「バッド」等）により、楽曲の評価（★ rating）を `music_meta.db` に永続化し、画面および音声フィードバックへ即座に反映します。
+
+#### 1. 評価更新ルール (`update_track_rating`)
+- **無印（未評価 / `NULL`）の場合**:
+  - **グッド (Good 👍)** ➔ **★３ (`rating = 3`)**
+  - **バッド (Bad 👎)** ➔ **★２ (`rating = 2`)**
+- **すでに評価されている場合 (1〜5)**:
+  - **グッド (Good 👍)** ➔ **★を＋1**（最大値: ★5）
+  - **バッド (Bad 👎)** ➔ **★を−1**（最小値: ★1）
+- **直接指定 (`rating = 1..5`)**:
+  - 指定された数値に設定（1〜5の範囲にクランプ）。
+
+#### 2. 音声・チャット連携
+- ユーザーが「この曲いいね」「高評価して」「グッド」等と発言 ➔ `action: "rate_good"` がトリガーされ、現在曲を Good ルールで更新し、「『Take Five』を ★4 に評価しました。」と発話・返答。
+- 「この曲いまいち」「バッド」「低評価」等と発言 ➔ `action: "rate_bad"` がトリガーされ、現在曲を Bad ルールで更新し、「『Take Five』を ★2 に評価しました。」と発話・返答。
 
 ---
 
@@ -436,7 +454,7 @@ ProcessCommand --> Idle : 処理実行・返答
 ---
 
 ### 6.3 `GET /api/status`
-- **概要**: 現在の moOde 再生ステータス、現在曲詳細、音声リスナー状態、言語モード、デモモード状態、LLMモデルを取得。
+- **概要**: 現在の moOde 再生ステータス（現在曲の `rating` 含む）、現在曲詳細、音声リスナー状態、言語モード、デモモード状態、LLMモデルを取得。
 
 ---
 
@@ -457,23 +475,6 @@ ProcessCommand --> Idle : 処理実行・返答
 
 ### 6.5 `POST /api/settings`
 - **概要**: システム設定値を更新し、`voice_bot_config.json` へ永続化保存した上で全 WebSocket クライアントへ変更を通知。
-- **Request Body (JSON)**:
-  ```json
-  {
-    "demo_mode": true,
-    "language": "ja",
-    "enable_daily_info": true,
-    "moode_ip": "192.168.68.198",
-    "moode_port": 6600
-  }
-  ```
-- **Response Body (JSON)**:
-  ```json
-  {
-    "success": true,
-    "settings": { ... }
-  }
-  ```
 
 ---
 
@@ -489,19 +490,47 @@ ProcessCommand --> Idle : 処理実行・返答
 
 ---
 
-### 6.7 `GET /api/player/cover`
+### 6.7 `POST /api/player/rate`
+- **概要**: 楽曲の評価（グッド👍 / バッド👎 または ★1〜5）を更新。
+- **Request Body (JSON)**:
+  ```json
+  {
+    "action": "good",      // "good" | "bad" (省略可、デフォルト: "good")
+    "file": "Jazz/Dave_Brubeck/Take_Five.flac", // 任意 (省略時は再生中の曲)
+    "track_id": 3610,      // 任意
+    "rating": 4            // 任意 (直接★数値を指定する場合)
+  }
+  ```
+- **Response Body (JSON)**:
+  ```json
+  {
+    "success": true,
+    "track_id": 3610,
+    "title": "Take Five",
+    "artist": "Dave Brubeck",
+    "file": "Jazz/Dave_Brubeck/Take_Five.flac",
+    "old_rating": 3,
+    "rating": 4,
+    "action": "good",
+    "message": "『Take Five』を ★4 に評価しました。"
+  }
+  ```
+
+---
+
+### 6.8 `GET /api/player/cover`
 - **概要**: 再生中楽曲または指定楽曲のアルバムジャケット画像（Cover Art）を取得。
 - **Query Parameters**: `file`, `artist`, `album`, `title` (すべて任意)
 - **Response**: 画像バイナリ (`image/jpeg` または `image/svg+xml`)
 
 ---
 
-### 6.6 `GET /api/history`
+### 6.9 `GET /api/history`
 - **概要**: サーバー起動時からのチャット送受信履歴（メモリ上）を取得。
 
 ---
 
-### 6.7 `POST /api/system/power`
+### 6.10 `POST /api/system/power`
 - **概要**: Web UI 等から Jetson Orin Nano Super 本体の再起動（Reboot）またはシャットダウン（Shutdown）を安全に実行。
 - **Request Body (JSON)**:
   ```json
@@ -541,6 +570,7 @@ ProcessCommand --> Idle : 処理実行・返答
    - すべてのメッセージには一意なメッセージID (`id`) が付与され、フロントエンドおよびバックエンドの双方向で重複受信・二重表示を確実に排除する仕組みを備えています。
 3. **音声認識ステータスイベント (`voice_event`)**: マイクのリッスン状態 (`"idle"`, `"listening"`, `"recognizing"`) を通知。
 4. **リアルタイム処理ステータスイベント (`process_status`)**: 現在実行中のフェーズ（`"idle"`, `"stt"`, `"llm"`, `"db"`, `"moode"`, `"tts"`, `"playing"`）を配信。
+5. **楽曲評価イベント (`track_rated`)**: 楽曲の評価（Good/Bad/★設定）更新時に全クライアントへ最新評価結果を配信。
 
 ---
 

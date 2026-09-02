@@ -1659,6 +1659,130 @@
       box-shadow: 0 0 28px rgba(0, 242, 254, 0.7);
     }
 
+    /* Rating & Feedback Bar */
+    .rating-bar-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 14px;
+      background: rgba(13, 18, 29, 0.6);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-color);
+      width: 100%;
+      margin: 4px 0 6px 0;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+
+    .rating-stars-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+
+    .rating-stars {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .star-btn {
+      font-size: 1.05rem;
+      color: rgba(255, 255, 255, 0.2);
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      line-height: 1;
+    }
+
+    .star-btn:hover {
+      transform: scale(1.25);
+      color: rgba(245, 158, 11, 0.7);
+    }
+
+    .star-btn.active {
+      color: #f59e0b;
+      filter: drop-shadow(0 0 5px rgba(245, 158, 11, 0.7));
+    }
+
+    .rating-status-text {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      font-weight: 500;
+      min-width: 44px;
+    }
+
+    .rating-status-text.rated {
+      color: #fbbf24;
+      font-weight: 600;
+    }
+
+    .rating-btn-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .rate-btn {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: var(--radius-full);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      outline: none;
+    }
+
+    .rate-btn .rate-emoji {
+      font-size: 0.9rem;
+      transition: transform 0.2s;
+    }
+
+    .rate-btn.good:hover {
+      background: rgba(16, 185, 129, 0.18);
+      border-color: rgba(16, 185, 129, 0.5);
+      color: #a7f3d0;
+      box-shadow: 0 0 10px rgba(16, 185, 129, 0.3);
+      transform: translateY(-1px) scale(1.04);
+    }
+
+    .rate-btn.good:hover .rate-emoji {
+      transform: scale(1.2) rotate(-6deg);
+    }
+
+    .rate-btn.bad:hover {
+      background: rgba(244, 63, 94, 0.18);
+      border-color: rgba(244, 63, 94, 0.5);
+      color: #fecdd3;
+      box-shadow: 0 0 10px rgba(244, 63, 94, 0.3);
+      transform: translateY(-1px) scale(1.04);
+    }
+
+    .rate-btn.bad:hover .rate-emoji {
+      transform: scale(1.2) rotate(6deg);
+    }
+
+    .rate-btn:active {
+      transform: scale(0.92);
+    }
+
+    .rate-btn.flash {
+      animation: rate-flash 0.5s ease-out;
+    }
+
+    @keyframes rate-flash {
+      0% { transform: scale(1.18); filter: brightness(1.4); }
+      50% { transform: scale(0.96); }
+      100% { transform: scale(1); filter: brightness(1); }
+    }
+
     /* Volume Control */
     .volume-box {
       display: flex;
@@ -2120,6 +2244,30 @@
           <button class="ctrl-btn" onclick="sendPlayerAction('stop')" title="停止">⏹</button>
         </div>
 
+        <!-- Rating & Feedback Bar (グッド/バッド評価 反映機能) -->
+        <div class="rating-bar-container" id="ratingBarContainer">
+          <div class="rating-stars-wrapper" title="現在の楽曲評価 (★1〜5)">
+            <div class="rating-stars" id="ratingStars">
+              <span class="star-btn" data-star="1" onclick="rateWithStars(1)" title="★1 (最低)">★</span>
+              <span class="star-btn" data-star="2" onclick="rateWithStars(2)" title="★2">★</span>
+              <span class="star-btn" data-star="3" onclick="rateWithStars(3)" title="★3 (標準)">★</span>
+              <span class="star-btn" data-star="4" onclick="rateWithStars(4)" title="★4">★</span>
+              <span class="star-btn" data-star="5" onclick="rateWithStars(5)" title="★5 (最高)">★</span>
+            </div>
+            <span class="rating-status-text" id="ratingStatusText">未評価</span>
+          </div>
+          <div class="rating-btn-group">
+            <button type="button" class="rate-btn good" id="btnRateGood" onclick="rateCurrentTrack('good')" title="高評価 (無印→★3, 既評価→+1)">
+              <span class="rate-emoji">👍</span>
+              <span class="rate-label">Good</span>
+            </button>
+            <button type="button" class="rate-btn bad" id="btnRateBad" onclick="rateCurrentTrack('bad')" title="低評価 (無印→★2, 既評価→-1)">
+              <span class="rate-emoji">👎</span>
+              <span class="rate-label">Bad</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Volume -->
         <div class="volume-box">
           <div class="volume-icon" onclick="toggleMute()" id="volIcon">🔊</div>
@@ -2310,6 +2458,15 @@
     const soundBars = document.getElementById('soundBars');
     const voiceListenerText = document.getElementById('voiceListenerText');
 
+    // Rating Elements
+    const ratingStars = document.getElementById('ratingStars');
+    const ratingStatusText = document.getElementById('ratingStatusText');
+    const btnRateGood = document.getElementById('btnRateGood');
+    const btnRateBad = document.getElementById('btnRateBad');
+    let currentTrackRating = null;
+    let currentTrackFile = '';
+    let currentTrackId = null;
+
     // Mobile Elements
     const mobileMiniPlayer = document.getElementById('mobileMiniPlayer');
     const miniCoverImg = document.getElementById('miniCoverImg');
@@ -2320,6 +2477,101 @@
     const tabBtnChat = document.getElementById('tabBtnChat');
     const tabBtnPlayer = document.getElementById('tabBtnPlayer');
     const tabPlayingDot = document.getElementById('tabPlayingDot');
+
+    function updateRatingUI(rating, title) {
+      currentTrackRating = (rating !== undefined && rating !== null && rating !== '') ? parseInt(rating) : null;
+      const stars = document.querySelectorAll('#ratingStars .star-btn');
+
+      stars.forEach(star => {
+        const val = parseInt(star.getAttribute('data-star'));
+        if (currentTrackRating !== null && val <= currentTrackRating) {
+          star.classList.add('active');
+        } else {
+          star.classList.remove('active');
+        }
+      });
+
+      if (ratingStatusText) {
+        if (currentTrackRating !== null && currentTrackRating >= 1) {
+          ratingStatusText.textContent = `★${currentTrackRating}`;
+          ratingStatusText.className = 'rating-status-text rated';
+        } else {
+          ratingStatusText.textContent = currentLang === 'en' ? 'Unrated' : '未評価';
+          ratingStatusText.className = 'rating-status-text';
+        }
+      }
+    }
+
+    let isRatingProcessing = false;
+    async function rateCurrentTrack(action) {
+      if (isRatingProcessing) return;
+      isRatingProcessing = true;
+
+      const targetBtn = action === 'good' ? btnRateGood : btnRateBad;
+      if (targetBtn) {
+        targetBtn.classList.add('flash');
+        setTimeout(() => targetBtn.classList.remove('flash'), 500);
+      }
+
+      try {
+        const payload = {
+          action: action,
+          file: currentTrackFile || undefined,
+          track_id: currentTrackId || undefined,
+        };
+
+        const res = await fetch('/api/player/rate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        if (data && data.success) {
+          updateRatingUI(data.rating, data.title);
+          const icon = action === 'good' ? '👍' : '👎';
+          showToast(`${icon} 『${data.title}』を ★${data.rating} に評価しました`);
+        } else {
+          showToast('⚠️ ' + (data.message || '評価の更新に失敗しました'));
+        }
+      } catch (err) {
+        console.error('Rating error:', err);
+        showToast('⚠️ 評価送信エラー');
+      } finally {
+        setTimeout(() => { isRatingProcessing = false; }, 300);
+      }
+    }
+
+    async function rateWithStars(starVal) {
+      if (isRatingProcessing) return;
+      isRatingProcessing = true;
+
+      try {
+        const payload = {
+          rating: starVal,
+          file: currentTrackFile || undefined,
+          track_id: currentTrackId || undefined,
+        };
+
+        const res = await fetch('/api/player/rate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const data = await res.json();
+        if (data && data.success) {
+          updateRatingUI(data.rating, data.title);
+          showToast(`⭐ 『${data.title}』を ★${data.rating} に評価しました`);
+        } else {
+          showToast('⚠️ ' + (data.message || '評価の更新に失敗しました'));
+        }
+      } catch (err) {
+        console.error('Star rating error:', err);
+      } finally {
+        setTimeout(() => { isRatingProcessing = false; }, 300);
+      }
+    }
 
     function switchMobileTab(tab) {
       if (tab === 'player') {
@@ -2541,6 +2793,10 @@
         }
       } else if (data.type === 'chat_message') {
         appendMessage(data.message);
+      } else if (data.type === 'track_rated') {
+        if (data.result && data.result.success) {
+          updateRatingUI(data.result.rating, data.result.title);
+        }
       } else if (data.type === 'voice_event') {
         handleVoiceEvent(data);
       } else if (data.type === 'process_status') {
@@ -2678,6 +2934,11 @@
       trackTitle.textContent = tTitle;
       trackArtist.textContent = tArtist;
       trackAlbum.textContent = tAlbum;
+
+      // Update Rating Info
+      currentTrackFile = song.file || '';
+      currentTrackId = song.track_id || song.id || null;
+      updateRatingUI(song.rating, tTitle);
 
       // Update Mini Player
       if (miniTrackTitle) miniTrackTitle.textContent = tTitle;

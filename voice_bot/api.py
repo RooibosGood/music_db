@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from . import config
 from . import coverart
+from . import db
 from . import mpd_client
 from . import state
 from .broadcaster import broadcast_event, broadcast_process_status, broadcast_status
@@ -43,6 +44,13 @@ class ChatRequest(BaseModel):
 class ControlRequest(BaseModel):
     action: str
     value: Optional[Any] = None
+
+
+class RateRequest(BaseModel):
+    action: Optional[str] = "good"  # "good" | "bad"
+    file: Optional[str] = None
+    track_id: Optional[int] = None
+    rating: Optional[int] = None
 
 
 class SystemPowerRequest(BaseModel):
@@ -224,6 +232,36 @@ async def api_player_control(req: ControlRequest):
     res = mpd_client.control_moode(cmd)
     broadcast_status()
     return JSONResponse({"result": res, "status": mpd_client.get_moode_status()})
+
+
+@app.post("/api/player/rate")
+async def api_player_rate(req: RateRequest):
+    """楽曲の評価を反映 (good: 無印→★3, 既評価→+1 / bad: 無印→★2, 既評価→-1)"""
+    file_path = req.file
+    track_id = req.track_id
+
+    # file_path / track_id が未指定の場合は現在再生中の曲を対象にする
+    if not file_path and track_id is None:
+        status = mpd_client.get_moode_status()
+        song = status.get("song", {})
+        file_path = song.get("file")
+        track_id = song.get("track_id")
+
+    res = db.update_track_rating(
+        action=req.action or "good",
+        file_path=file_path,
+        track_id=track_id,
+        direct_rating=req.rating,
+    )
+
+    # 全クライアントに最新ステータスとレート更新イベントを配信
+    broadcast_status()
+    broadcast_event({
+        "type": "track_rated",
+        "result": res,
+    })
+
+    return JSONResponse(res)
 
 
 @app.post("/api/system/power")

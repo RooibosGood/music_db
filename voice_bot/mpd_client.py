@@ -13,7 +13,7 @@ import time
 import traceback
 from typing import Any, Dict, Optional
 
-from .db import add_db_tracks_to_mpd, find_track_metadata, search_tracks_from_db
+from .db import add_db_tracks_to_mpd, find_track_metadata, search_tracks_from_db, update_track_rating
 
 from . import config
 
@@ -321,6 +321,7 @@ def get_moode_status() -> Dict[str, Any]:
         description_en = (db_meta.get("description_en", "") if db_meta else "") or song.get("description_en", "")
         title_en = (db_meta.get("title_en", "") if db_meta else "") or song.get("title_en", "")
         artist_en = (db_meta.get("artist_en", "") if db_meta else "") or song.get("artist_en", "")
+        rating = (db_meta.get("rating") if db_meta else None) or song.get("rating")
         description = (description_en if config.ANNOUNCE_LANGUAGE == "en" and description_en else description_ja) or description_en or description_ja
 
         song_info = {
@@ -331,9 +332,11 @@ def get_moode_status() -> Dict[str, Any]:
             "album": song_album,
             "file": song_file,
             "id": song.get("id", ""),
+            "track_id": db_meta.get("id") if db_meta else song.get("track_id"),
             "sample_rate": sample_rate,
             "bit_depth": bit_depth,
             "is_hires": (int(sample_rate) > 48000 or int(bit_depth) > 16) if sample_rate.isdigit() and bit_depth.isdigit() else (db_meta.get("is_hires", 0) == 1 if db_meta else song.get("is_hires", False)),
+            "rating": rating,
             "description": description,
             "description_ja": description_ja,
             "description_en": description_en,
@@ -527,6 +530,29 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
             client.setvol(int(vol))
             result["success"] = True
             result["message"] = f"音量を {vol}% に設定しました。"
+
+        elif action in ("rate_good", "rate_bad", "good", "bad", "like", "dislike"):
+            is_good = action in ("rate_good", "good", "like")
+            cur_song = client.currentsong()
+            cur_file = cur_song.get("file", "")
+            cur_title = cur_song.get("title") or (cur_file.split("/")[-1] if cur_file else "再生中の曲")
+            cur_artist = cur_song.get("artist") or ""
+
+            act_str = "good" if is_good else "bad"
+            _broadcast("db", f"⭐ 楽曲を評価中 ({'Good 👍' if is_good else 'Bad 👎'}): 『{cur_title}』")
+            rate_res = update_track_rating(
+                action=act_str,
+                file_path=cur_file,
+            )
+            result["success"] = rate_res.get("success", False)
+            result["rating_result"] = rate_res
+            result["message"] = rate_res.get("message", "評価を更新しました。")
+            result["track_info"] = {
+                "title": cur_title,
+                "artist": cur_artist,
+                "file": cur_file,
+                "rating": rate_res.get("rating"),
+            }
 
         client.close()
         client.disconnect()

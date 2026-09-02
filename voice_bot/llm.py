@@ -41,7 +41,7 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
 出力は必ず、説明文やMarkdownを含まない1つのJSONオブジェクトだけにしてください。
 
 【出力形式】
-{"action":"play_search"|"play"|"pause"|"stop"|"next"|"previous"|"unknown","query":"検索語","reply":"返答"}
+{"action":"play_search"|"play"|"pause"|"stop"|"next"|"previous"|"rate_good"|"rate_bad"|"unknown","query":"検索語","reply":"返答"}
 
 【ルール】
 - 曲やジャンル、アーティストの指定・再生要求 ➔ action: "play_search", query: "検索対象(例: ジャズ, ロック, Diana Krall, ビートルズ, ハイレゾ, 静かな曲, Ambientなど)", reply: "〜を再生します。/ Playing jazz now."
@@ -50,6 +50,8 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
   - "play Beatles" / "ビートルズ流して" ➔ {"action":"play_search","query":"Beatles","reply":"ビートルズを再生します。"}
   - "play something calm" / "静かな曲" ➔ {"action":"play_search","query":"静か","reply":"落ち着いた曲を再生します。"}
   - "play music" / "何か音楽かけて" ➔ {"action":"play_search","query":"","reply":"おすすめの音楽を再生します。"}
+- 再生中楽曲の評価（グッド・いいね・高評価） ➔ action: "rate_good", query: "", reply: "この曲を高評価しました。"
+- 再生中楽曲の評価（バッド・低評価・いまいち） ➔ action: "rate_bad", query: "", reply: "この曲に低評価をつけました。"
 - 単なる再生再開（曲指定なしの「再生」「再開」「play」） ➔ action: "play", query: "", reply: "音楽の再生を再開します。"
 - 「止めて」「一時停止」「ストップ」「pause」「stop」 ➔ action: "pause", query: "", reply: "音楽を一時停止します。"
 - 「次の曲」「スキップ」「next」「skip」 ➔ action: "next", query: "", reply: "次の曲を再生します。"
@@ -129,11 +131,17 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
     if any(k in lower_text for k in ["前", "戻っ", "previous", "prev", "back"]):
         return {"action": "previous", "query": "", "reply": "前の曲に戻ります。"}
 
-    # 4. 単なる再生再開（play / 再生 / スタート）
+    # 4. 楽曲評価（グッド / バッド）
+    if any(k in lower_text for k in ["いいね", "グッド", "高評価", "すき", "好き", "good", "like", "thumbs up", "great song"]):
+        return {"action": "rate_good", "query": "", "reply": "この曲を高評価しました。"}
+    if any(k in lower_text for k in ["バッド", "低評価", "いまいち", "微妙", "嫌い", "bad", "dislike", "thumbs down", "poor"]):
+        return {"action": "rate_bad", "query": "", "reply": "この曲に低評価をつけました。"}
+
+    # 5. 単なる再生再開（play / 再生 / スタート）
     if lower_text in ["play", "resume", "start", "再生", "再開", "スタート"]:
         return {"action": "play", "query": "", "reply": "音楽の再生を再開します。"}
 
-    # 5. 選曲・再生リクエスト（日英対応）
+    # 6. 選曲・再生リクエスト（日英対応）
     play_triggers = [
         "かけて", "流して", "再生", "聴きたい", "聴かせて", "play", "put on", "listen to",
         "ジャズ", "jazz", "ロック", "rock", "クラシック", "classic", "ポップ", "pop",
@@ -177,6 +185,17 @@ def process_user_message(
     reply_text = cmd.get("reply", "承知いたしました。")
     description = control_res.get("description", "")
     track_info = control_res.get("track_info") or {}
+
+    # 楽曲評価アクションの場合はメッセージを最適化
+    if cmd.get("action") in ("rate_good", "rate_bad") and control_res.get("rating_result"):
+        rate_info = control_res["rating_result"]
+        if rate_info.get("success"):
+            new_r = rate_info.get("rating")
+            t_name = rate_info.get("title", "この曲")
+            if config.ANNOUNCE_LANGUAGE == "en":
+                reply_text = f"Rated '{t_name}' with {new_r} stars."
+            else:
+                reply_text = f"『{t_name}』を ★{new_r} に評価しました。"
 
     # 3. 再生・スキップ時、曲紹介文を構築
     if cmd.get("action") in ("play_search", "next", "previous") and control_res.get("success"):

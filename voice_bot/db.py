@@ -17,16 +17,31 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 recent_played_track_ids: List[int] = []
 
 
+def ensure_rating_column_exists(conn: sqlite3.Connection):
+    """tracks テーブルに rating カラムが存在しない場合は自動で追加"""
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA table_info(tracks);")
+        columns = [col[1] for col in cur.fetchall()]
+        if "rating" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN rating INTEGER DEFAULT NULL;")
+            conn.commit()
+            print("✨ [DB] tracks テーブルに 'rating' カラムを追加しました。")
+    except Exception as e:
+        print(f"⚠️ [DB rating カラム確認エラー]: {e}")
+
+
 def find_track_metadata(
     file_path: Optional[str] = None,
     title: Optional[str] = None,
     artist: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """music_meta.db からファイル名やタイトル・アーティスト名で楽曲情報・解説文を取得"""
+    """music_meta.db からファイル名やタイトル・アーティスト名で楽曲情報・解説文・評価を取得"""
     if not os.path.exists(DB_PATH):
         return None
     try:
         conn = sqlite3.connect(DB_PATH)
+        ensure_rating_column_exists(conn)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
@@ -38,7 +53,7 @@ def find_track_metadata(
 
             cur.execute(
                 """
-                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
                 FROM tracks
                 WHERE file_path LIKE ? OR relative_path LIKE ? OR relative_path = ? OR file_path LIKE ? OR relative_path LIKE ?
                 LIMIT 1;
@@ -46,7 +61,7 @@ def find_track_metadata(
                 (f"%{fname}", f"%{fname}", norm_path, f"%{fname_stem}%", f"%{fname_stem}%"),
             )
             row = cur.fetchone()
-            if row and (row["description_ja"] or row["description_en"]):
+            if row and (row["description_ja"] or row["description_en"] or row["rating"] is not None):
                 conn.close()
                 return dict(row)
 
@@ -54,7 +69,7 @@ def find_track_metadata(
         if title and artist and artist != "アーティスト未設定" and artist != "Unknown":
             cur.execute(
                 """
-                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
                 FROM tracks
                 WHERE (title LIKE ? OR ? LIKE '%' || title || '%') AND (artist LIKE ? OR ? LIKE '%' || artist || '%')
                 LIMIT 1;
@@ -62,7 +77,7 @@ def find_track_metadata(
                 (f"%{title}%", title, f"%{artist}%", artist),
             )
             row = cur.fetchone()
-            if row and (row["description_ja"] or row["description_en"]):
+            if row and (row["description_ja"] or row["description_en"] or row["rating"] is not None):
                 conn.close()
                 return dict(row)
 
@@ -70,7 +85,7 @@ def find_track_metadata(
         if title and title != "未選択" and title != "Unknown":
             cur.execute(
                 """
-                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
                 FROM tracks
                 WHERE title LIKE ? OR ? LIKE '%' || title || '%'
                 ORDER BY CASE WHEN title = ? THEN 0 ELSE 1 END
@@ -89,6 +104,153 @@ def find_track_metadata(
     return None
 
 
+def get_track_rating(
+    file_path: Optional[str] = None,
+    track_id: Optional[int] = None,
+) -> Optional[int]:
+    """指定された楽曲の現在の評価（1〜5、未評価時は None）を取得"""
+    if not os.path.exists(DB_PATH):
+        return None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        ensure_rating_column_exists(conn)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        row = None
+        if track_id is not None:
+            cur.execute("SELECT rating FROM tracks WHERE id = ? LIMIT 1;", (track_id,))
+            row = cur.fetchone()
+
+        if not row and file_path:
+            norm_path = file_path.replace("\\", "/")
+            fname = norm_path.split("/")[-1]
+            fname_stem = os.path.splitext(fname)[0]
+            cur.execute(
+                """
+                SELECT rating FROM tracks
+                WHERE file_path = ? OR relative_path = ? OR relative_path LIKE ? OR file_path LIKE ? OR relative_path LIKE ?
+                LIMIT 1;
+            """,
+                (file_path, norm_path, f"%{fname}", f"%{fname}", f"%{fname_stem}%"),
+            )
+            row = cur.fetchone()
+
+        conn.close()
+        if row and row["rating"] is not None:
+            return int(row["rating"])
+        return None
+    except Exception as e:
+        print(f"⚠️ [get_track_rating エラー]: {e}")
+        return None
+
+
+def update_track_rating(
+    action: str = "good",
+    file_path: Optional[str] = None,
+    track_id: Optional[int] = None,
+    direct_rating: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    楽曲の評価を更新する。
+    【ルール】
+    - 現在「無印 (None/0)」の場合:
+      - good ➔ ★3
+      - bad  ➔ ★2
+    - すでに評価されている場合:
+      - good ➔ ★+1 (最大★5)
+      - bad  ➔ ★-1 (最小★1)
+    - direct_rating 指定時: 1〜5 の数値を直接設定
+    """
+    if not os.path.exists(DB_PATH):
+        return {"success": False, "message": "データベースが見つかりません。"}
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        ensure_rating_column_exists(conn)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        # 対象レコードを検索
+        row = None
+        if track_id is not None:
+            cur.execute(
+                "SELECT id, title, artist, file_path, relative_path, rating FROM tracks WHERE id = ? LIMIT 1;",
+                (track_id,),
+            )
+            row = cur.fetchone()
+
+        if not row and file_path:
+            norm_path = file_path.replace("\\", "/")
+            fname = norm_path.split("/")[-1]
+            fname_stem = os.path.splitext(fname)[0]
+            cur.execute(
+                """
+                SELECT id, title, artist, file_path, relative_path, rating FROM tracks
+                WHERE file_path = ? OR relative_path = ? OR relative_path LIKE ? OR file_path LIKE ? OR relative_path LIKE ?
+                ORDER BY CASE WHEN relative_path = ? OR file_path = ? THEN 0 ELSE 1 END
+                LIMIT 1;
+            """,
+                (file_path, norm_path, f"%{fname}", f"%{fname}", f"%{fname_stem}%", norm_path, file_path),
+            )
+            row = cur.fetchone()
+
+        if not row:
+            conn.close()
+            return {"success": False, "message": "評価対象の楽曲がデータベースに見つかりませんでした。"}
+
+        current_rating = row["rating"]
+        old_rating = current_rating
+
+        # 新しい評価の計算
+        if direct_rating is not None:
+            new_rating = max(1, min(5, int(direct_rating)))
+        elif current_rating is None or current_rating == 0:
+            # 無印の場合
+            if action.lower() in ("good", "like", "up", "plus"):
+                new_rating = 3
+            else:
+                new_rating = 2
+        else:
+            # 既に評価済みの場合
+            if action.lower() in ("good", "like", "up", "plus"):
+                new_rating = min(5, int(current_rating) + 1)
+            else:
+                new_rating = max(1, int(current_rating) - 1)
+
+        # DB 更新
+        target_id = row["id"]
+        cur.execute("UPDATE tracks SET rating = ? WHERE id = ?;", (new_rating, target_id))
+        conn.commit()
+        conn.close()
+
+        track_title = row["title"] or "楽曲"
+        track_artist = row["artist"] or ""
+        artist_str = f"（{track_artist}）" if track_artist and track_artist != "Unknown" else ""
+
+        print(
+            f"⭐ [Rating Update] 『{track_title}』{artist_str} の評価を更新: {old_rating} ➔ ★{new_rating} (action={action})",
+            flush=True,
+        )
+
+        return {
+            "success": True,
+            "track_id": target_id,
+            "title": track_title,
+            "artist": track_artist,
+            "file": row["relative_path"] or row["file_path"],
+            "old_rating": old_rating,
+            "rating": new_rating,
+            "action": action,
+            "message": f"『{track_title}』を ★{new_rating} に評価しました。",
+        }
+
+    except Exception as e:
+        print(f"⚠️ [update_track_rating エラー]: {e}")
+        return {"success": False, "message": f"評価更新中にエラーが発生しました: {e}"}
+
+
+
 def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
     """music_meta.db からユーザー要望（ジャンル、ムード、エネルギー、ハイレゾ、アーティスト、曲名等）に合致する楽曲を完全ランダム抽出"""
     global recent_played_track_ids
@@ -97,6 +259,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         return []
     try:
         conn = sqlite3.connect(DB_PATH)
+        ensure_rating_column_exists(conn)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
 
@@ -168,7 +331,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
 
         # まず直近再生除外 ＋ description ありの候補をランダムに50件取得
         sql = f"""
-            SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+            SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
             FROM tracks
             {base_where}
             ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
@@ -184,7 +347,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         # ヒットしなかった場合、キーワードの部分一致でフォールバック
         if not candidate_rows and keyword_q:
             cur.execute(f"""
-                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
                 FROM tracks
                 WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?
                 ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
@@ -195,7 +358,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         # それでもヒットしない場合、解説文付きの曲からランダムに取得
         if not candidate_rows:
             cur.execute("""
-                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
                 FROM tracks
                 WHERE (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '')
                 ORDER BY RANDOM()
@@ -205,7 +368,7 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
 
         # それでも無ければテーブル全体からランダム取得
         if not candidate_rows:
-            cur.execute("SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, description_ja, description_en FROM tracks ORDER BY RANDOM() LIMIT 50;")
+            cur.execute("SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en FROM tracks ORDER BY RANDOM() LIMIT 50;")
             candidate_rows = [dict(r) for r in cur.fetchall()]
 
         # Python 側でも再度シャッフルして完全なランダム性を確保

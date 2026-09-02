@@ -87,6 +87,7 @@ def init_db(reset: bool = False):
             performers TEXT,
             description_ja TEXT,
             description_en TEXT,
+            rating INTEGER DEFAULT NULL,
             analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
@@ -109,6 +110,8 @@ def init_db(reset: bool = False):
             cur.execute("ALTER TABLE tracks ADD COLUMN artist_en TEXT;")
         if "music_category" not in columns:
             cur.execute("ALTER TABLE tracks ADD COLUMN music_category TEXT;")
+        if "rating" not in columns:
+            cur.execute("ALTER TABLE tracks ADD COLUMN rating INTEGER DEFAULT NULL;")
         if "description_ja" not in columns:
             cur.execute("ALTER TABLE tracks ADD COLUMN description_ja TEXT;")
             # 旧descriptionカラムが存在する場合はデータを移行
