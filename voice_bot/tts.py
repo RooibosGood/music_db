@@ -672,6 +672,135 @@ def build_japanese_track_announcement(
     return f"{prefix}『{t_title}』を再生します。"
 
 
+def analyze_playlist_vibe(selected_tracks: list) -> dict:
+    """
+    選曲されたトラック群（selected_tracks）から、
+    エネルギー、ムード、ジャンル、ハイレゾ比率、代表曲を分析し、
+    雰囲気解説テキスト（日本語/英語）を導出する。
+    """
+    if not selected_tracks:
+        return {
+            "avg_energy": 3.0,
+            "vibe_ja": "心地よいサウンド",
+            "vibe_en": "pleasant sounds",
+            "samples_ja": [],
+            "samples_en": [],
+        }
+
+    total_count = len(selected_tracks)
+
+    # 1. エネルギー集計 (energy_level: 1〜5)
+    energies = []
+    for t in selected_tracks:
+        e = t.get("energy_level")
+        if e is not None:
+            try:
+                energies.append(float(e))
+            except (ValueError, TypeError):
+                pass
+    avg_energy = (sum(energies) / len(energies)) if energies else 3.0
+
+    # 2. ジャンル集計
+    genre_counts: dict = {}
+    for t in selected_tracks:
+        g = (t.get("genre") or "").strip()
+        if g and g not in ("その他", "None", "Unknown", ""):
+            for g_item in g.split(","):
+                g_clean = g_item.strip()
+                if g_clean:
+                    genre_counts[g_clean] = genre_counts.get(g_clean, 0) + 1
+    top_genres = sorted(genre_counts.keys(), key=lambda k: genre_counts[k], reverse=True)
+
+    # 3. ムード集計
+    mood_counts: dict = {}
+    for t in selected_tracks:
+        m = (t.get("mood") or "").strip()
+        if m and m not in ("None", "Unknown", ""):
+            for m_item in m.split(","):
+                m_clean = m_item.strip()
+                if m_clean:
+                    mood_counts[m_clean] = mood_counts.get(m_clean, 0) + 1
+    top_moods = sorted(mood_counts.keys(), key=lambda k: mood_counts[k], reverse=True)
+
+    # 4. ハイレゾ比率
+    hires_count = sum(1 for t in selected_tracks if t.get("is_hires"))
+    is_mostly_hires = (hires_count >= total_count / 2) and hires_count > 0
+
+    # 5. 代表曲サンプル（上位3曲）
+    samples_ja = []
+    samples_en = []
+    for t in selected_tracks[:3]:
+        t_title = t.get("title") or "楽曲"
+        t_artist = t.get("artist") or ""
+        t_title_en = t.get("title_en") or t_title
+        t_artist_en = t.get("artist_en") or t_artist
+        if t_artist and t_artist not in ("アーティスト未設定", "Unknown", "unknown"):
+            samples_ja.append(f"『{t_title}』（{t_artist}）")
+        else:
+            samples_ja.append(f"『{t_title}』")
+        if t_artist_en and t_artist_en not in ("アーティスト未設定", "Unknown", "unknown"):
+            samples_en.append(f"'{t_title_en}' by {t_artist_en}")
+        else:
+            samples_en.append(f"'{t_title_en}'")
+
+    # 6. 日本語・英語の雰囲気コメント (vibe_ja / vibe_en)
+    primary_genre = top_genres[0] if top_genres else ""
+    primary_mood = top_moods[0] if top_moods else ""
+
+    if avg_energy <= 2.2:
+        # ゆったり・リラックス系
+        if any(j in primary_genre for j in ("ジャズ", "Jazz", "Fusion", "Bossa")):
+            vibe_ja = "静かで落ち着いた夜に似合う、ゆったりとしたリラックスジャズ"
+            vibe_en = "a calm and mellow jazz selection perfect for unwinding"
+        elif any(c in primary_genre for c in ("クラシック", "Classical", "インスト", "Instrumental")):
+            vibe_ja = "優美で穏やかな響きが心地よい、リラックスできるクラシック・インスト名曲"
+            vibe_en = "an elegant, serene classical and instrumental selection"
+        else:
+            vibe_ja = "ゆったりと落ち着いた時間を過ごせる、穏やかでリラックスしたナンバー"
+            vibe_en = "a laid-back, soothing selection to help you relax"
+    elif avg_energy >= 3.8:
+        # アップテンポ・エネルギッシュ系
+        if any(r in primary_genre for r in ("ロック", "Rock", "Metal", "Punk")):
+            vibe_ja = "力強いビートと爽快なグルーヴが響く、エネルギッシュなロックナンバー"
+            vibe_en = "an energetic rock lineup packed with driving beats and powerful grooves"
+        elif any(p in primary_genre for p in ("ポップ", "Pop", "Dance", "Disco", "Funk")):
+            vibe_ja = "気分が明るく盛り上がる、キャッチーでリズミカルなポップス"
+            vibe_en = "an upbeat, catchy pop selection full of positive energy"
+        else:
+            vibe_ja = "気分を爽快に盛り上げてくれる、躍動感あふれるエネルギッシュな楽曲"
+            vibe_en = "an upbeat, dynamic lineup full of lively energy"
+    else:
+        # ミディアムテンポ・上質系
+        if any(j in primary_genre for j in ("ジャズ", "Jazz", "Fusion", "Bossa")):
+            vibe_ja = "洗練された大人の空間を演出する、心地よいグルーヴの上質なジャズ"
+            vibe_en = "a sophisticated, smooth jazz lineup with a great groove"
+        elif any(r in primary_genre for r in ("ロック", "Rock")):
+            vibe_ja = "味わい深いメロディと心地よいビートが楽しめる、名作ロックの数々"
+            vibe_en = "a rich, timeless rock selection with memorable melodies"
+        elif any(c in primary_genre for c in ("クラシック", "Classical")):
+            vibe_ja = "豊かで美しいハーモニーが広がる、心に響くクラシックセレクション"
+            vibe_en = "a beautiful classical selection with rich harmonies"
+        elif primary_mood:
+            vibe_ja = f"{primary_mood}なテイストを感じられる、心地よいバランスの楽曲"
+            vibe_en = f"a beautifully balanced selection with a {primary_mood.lower()} vibe"
+        else:
+            vibe_ja = "親しみやすいメロディと心地よいサウンドが楽しめる、おすすめのセレクション"
+            vibe_en = "a delightful mix of memorable melodies and great sound"
+
+    return {
+        "avg_energy": avg_energy,
+        "primary_genre": primary_genre,
+        "primary_mood": primary_mood,
+        "top_genres": top_genres,
+        "top_moods": top_moods,
+        "is_mostly_hires": is_mostly_hires,
+        "vibe_ja": vibe_ja,
+        "vibe_en": vibe_en,
+        "samples_ja": samples_ja,
+        "samples_en": samples_en,
+    }
+
+
 def build_playlist_overview_announcement(
     selected_tracks: list,
     query: str = "",
@@ -679,7 +808,8 @@ def build_playlist_overview_announcement(
     language: str = "ja",
 ) -> str:
     """
-    選曲された曲群（プレイリスト）全体を俯瞰し、選曲概要＋1曲目紹介のナレーション文を生成
+    選曲された曲群（プレイリスト）全体を俯瞰し、
+    「選曲した曲の雰囲気・テイストのコメント」＋「1曲目紹介」のナレーション文を生成
     （日本語 VOICEVOX / 英語 DJ モード両対応、LLM動的生成＆テンプレートフォールバック）
     """
     if not selected_tracks:
@@ -694,7 +824,10 @@ def build_playlist_overview_announcement(
     total_count = len(selected_tracks)
     first_song = first_track or selected_tracks[0]
 
-    # 1. アーティスト一覧の抽出（重複排除、未設定除外）
+    # 1. プレイリストの雰囲気分析
+    vibe_info = analyze_playlist_vibe(selected_tracks)
+
+    # 2. アーティスト一覧の抽出（重複排除、未設定除外）
     artists_raw = []
     for t in selected_tracks:
         a = (t.get("artist") or "").strip()
@@ -702,24 +835,7 @@ def build_playlist_overview_announcement(
             if a not in artists_raw:
                 artists_raw.append(a)
 
-    # 2. ジャンル・ムードの抽出
-    genres_raw = []
-    moods_raw = []
-    for t in selected_tracks:
-        g = (t.get("genre") or "").strip()
-        if g and g not in ("その他", "None", ""):
-            for g_item in g.split(","):
-                g_clean = g_item.strip()
-                if g_clean and g_clean not in genres_raw:
-                    genres_raw.append(g_clean)
-        m = (t.get("mood") or "").strip()
-        if m:
-            for m_item in m.split(","):
-                m_clean = m_item.strip()
-                if m_clean and m_clean not in moods_raw:
-                    moods_raw.append(m_clean)
-
-    # 1曲目の情報
+    # 3. 1曲目の情報
     first_title = (first_song.get("title") or "楽曲").strip()
     first_artist = (first_song.get("artist") or "").strip()
     first_title_en = (first_song.get("title_en") or "").strip()
@@ -754,37 +870,45 @@ def build_playlist_overview_announcement(
         else:
             artist_phrase = ""
 
-        theme_en = query.strip() if query else (genres_raw[0] if genres_raw else "music")
+        theme_en = query.strip() if query else (vibe_info["top_genres"][0] if vibe_info["top_genres"] else "music")
         for ja_g, en_g in GENRE_JA_TO_EN.items():
             if ja_g in theme_en:
                 theme_en = en_g
                 break
 
-        # 1. LLMによる英語DJトーク生成
+        # 1. LLMによる英語DJトーク生成（雰囲気コメント入り）
         if config.LLAMA_CPP_CHAT_URL:
             try:
                 prompt = (
-                    f"You are a cool FM Radio DJ. "
-                    f"Write a smooth, natural 2-sentence opening radio announcement introducing the selected playlist and the first track. "
-                    f"Request/Theme: {theme_en}, Total Tracks: {total_count}, "
-                    f"Artists: {', '.join(en_artists) if en_artists else en_artist}, "
-                    f"First Track: '{en_title}' by {en_artist}, "
-                    f"First Track Info: {desc_en or desc_ja[:120]}. "
-                    f"Keep it under 35 words. Output ONLY the radio spoken line without quotes."
+                    f"You are a charismatic, smooth FM Radio DJ and music curator. "
+                    f"Looking at the selected playlist and its overall atmosphere, write a natural, engaging 2-sentence opening radio announcement. "
+                    f"First, comment on the mood/vibe of the selected songs, then smoothly introduce the first track.\n\n"
+                    f"[Selection Details]\n"
+                    f"- Request/Theme: {theme_en}\n"
+                    f"- Total Tracks: {total_count}\n"
+                    f"- Main Artists: {', '.join(en_artists) if en_artists else en_artist}\n"
+                    f"- Overall Atmosphere/Vibe: {vibe_info['vibe_en']} (energy level: {vibe_info['avg_energy']:.1f}/5)\n"
+                    f"- Sample Tracks: {', '.join(vibe_info['samples_en'])}\n"
+                    f"- First Track: '{en_title}' by {en_artist}\n"
+                    f"- First Track Info: {desc_en or desc_ja[:120]}\n\n"
+                    f"[Rules]\n"
+                    f"- Start by highlighting the atmosphere/vibe of this selection in a cool radio DJ voice.\n"
+                    f"- Transition smoothly to the first track: 'Let's kick things off with...'\n"
+                    f"- Keep it under 45 words. Output ONLY the spoken radio line without quotes."
                 )
                 payload = {
                     "model": config.LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "temperature": 0.3,
-                    "max_tokens": 80,
+                    "temperature": 0.35,
+                    "max_tokens": 90,
                 }
                 res = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=6.0)
                 dj_line = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                 dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
                 dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
                 if dj_line and len(dj_line) > 15:
-                    print(f"🎙️ [English DJ 選曲俯瞰ナレーション (LLM)] '{dj_line}'", flush=True)
+                    print(f"🎙️ [English DJ 選曲俯瞰・雰囲気ナレーション (LLM)] '{dj_line}'", flush=True)
                     return dj_line
             except Exception:
                 pass
@@ -792,66 +916,58 @@ def build_playlist_overview_announcement(
         # 2. 英語テンプレートフォールバック
         clean_en_desc = clean_english_text_for_speech(desc_en, max_chars=140) if desc_en else ""
         if artist_phrase:
-            intro = f"I've lined up {total_count} great tracks {artist_phrase}."
+            intro = f"I've selected {total_count} tracks {artist_phrase}—{vibe_info['vibe_en']}."
         elif theme_en:
-            intro = f"Here are {total_count} {theme_en} tracks for you."
+            intro = f"Here are {total_count} tracks for '{theme_en}'—{vibe_info['vibe_en']}."
         else:
-            intro = f"I've selected {total_count} tracks for you."
+            intro = f"I've lined up {total_count} tracks—{vibe_info['vibe_en']}."
 
         kickoff = f"Let's get started with '{en_title}' by {en_artist}." if en_artist else f"Let's get started with '{en_title}'."
         announcement = f"{intro} {kickoff}"
         if clean_en_desc:
             announcement += f" {clean_en_desc}"
-        print(f"🎙️ [English DJ 選曲俯瞰ナレーション (Template)] {announcement}", flush=True)
+        print(f"🎙️ [English DJ 選曲俯瞰・雰囲気ナレーション (Template)] {announcement}", flush=True)
         return announcement
 
     else:
         # 日本語モード
-        if len(artists_raw) == 1:
-            artist_phrase = f"{artists_raw[0]}のナンバー"
-        elif len(artists_raw) == 2:
-            artist_phrase = f"{artists_raw[0]}や{artists_raw[1]}"
-        elif len(artists_raw) >= 3:
-            artist_phrase = f"{artists_raw[0]}や{artists_raw[1]}をはじめとするアーティスト"
-        else:
-            artist_phrase = ""
+        theme_ja = query.strip() if query else (vibe_info["top_genres"][0] if vibe_info["top_genres"] else "")
 
-        theme_ja = query.strip() if query else (genres_raw[0] if genres_raw else "")
-        if theme_ja:
-            theme_phrase = f"「{theme_ja}」"
-        elif moods_raw:
-            theme_phrase = f"{moods_raw[0]}な雰囲気"
-        else:
-            theme_phrase = "おすすめの楽曲"
-
-        # 1. LLM (llama.cpp) による日本語選曲俯瞰トーク生成
+        # 1. LLM (llama.cpp) による日本語選曲俯瞰・雰囲気トーク生成
         if config.LLAMA_CPP_CHAT_URL:
             try:
                 prompt = (
-                    f"あなたはFMラジオのパーソナリティ（DJ）です。"
-                    f"リスナーのリクエストに基づいて選曲されたプレイリストについて、選曲の全体像を俯瞰した自然で魅力的なオープニングコメント（選曲のテーマ・アーティスト・曲数）と、1曲目の紹介文を作成してください。\n"
-                    f"リクエスト/テーマ: {theme_ja or 'おすすめ'}\n"
-                    f"選曲数: 全{total_count}曲\n"
-                    f"主なアーティスト: {', '.join(artists_raw[:3]) if artists_raw else first_artist}\n"
-                    f"1曲目: 『{first_title}』{f'（{first_artist}）' if first_artist else ''}\n"
-                    f"1曲目の背景・解説: {desc_ja[:120]}\n"
-                    f"【条件】\n"
-                    f"- ラジオの曲紹介として自然な話し言葉で、2〜3文（80〜120文字程度）で出力してください。\n"
-                    f"- 余計な前置きやマークダウン、引用符は出力せず、発話するナレーション文のみを出力してください。"
+                    f"あなたはFMラジオのパーソナリティ（音楽DJ・ソムリエ）です。"
+                    f"選曲された楽曲リスト全体（雰囲気・ムード・テンポ感）を見て、"
+                    f"「どのような雰囲気・世界観の曲が集まったのか」を魅力的にコメントし、"
+                    f"続けて1曲目をスムーズに紹介するオープニングナレーションを作成してください。\n\n"
+                    f"【選曲データ】\n"
+                    f"- リクエスト/テーマ: {theme_ja or 'おすすめ'}\n"
+                    f"- 選曲数: 全{total_count}曲\n"
+                    f"- 主なアーティスト: {', '.join(artists_raw[:3]) if artists_raw else first_artist}\n"
+                    f"- 選曲の全体的な雰囲気・特徴: {vibe_info['vibe_ja']}（エネルギー感: {vibe_info['avg_energy']:.1f}/5）\n"
+                    f"- 選曲リスト（抜粋）: {', '.join(vibe_info['samples_ja'])}\n"
+                    f"- 1曲目: 『{first_title}』{f'（{first_artist}）' if first_artist else ''}\n"
+                    f"- 1曲目の解説: {desc_ja[:120]}\n\n"
+                    f"【ナレーション作成ルール】\n"
+                    f"1. 冒頭で「〜〜な雰囲気のナンバーを集めました」「ゆったりと落ち着いた時間を過ごせる穏やかな選曲です」など、選曲された楽曲たちの雰囲気・テイストについてコメントすること。\n"
+                    f"2. 続けて「まずは1曲目、『{first_title}』からお届けします」と自然に1曲目の紹介に繋げること。\n"
+                    f"3. ラジオの生放送のように親しみやすく心地よい話し言葉で、2〜3文（100〜140文字程度）で出力すること。\n"
+                    f"4. 余計な前置きやマークダウン、引用符は出力せず、発話するナレーション文のみを出力すること。"
                 )
                 payload = {
                     "model": config.LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
                     "temperature": 0.4,
-                    "max_tokens": 128,
+                    "max_tokens": 140,
                 }
                 res = _http_post_json(config.LLAMA_CPP_CHAT_URL, payload, timeout=6.0)
                 dj_line = res.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                 dj_line = re.sub(r"<think>[\s\S]*?</think>", "", dj_line).strip()
                 dj_line = dj_line.replace('"', '').replace('```', '').replace('\n', ' ').strip()
                 if dj_line and len(dj_line) > 20:
-                    print(f"📖 [日本語 選曲俯瞰ナレーション (LLM)] '{dj_line}'", flush=True)
+                    print(f"📖 [日本語 選曲俯瞰・雰囲気ナレーション (LLM)] '{dj_line}'", flush=True)
                     return dj_line
             except Exception:
                 pass
@@ -861,42 +977,30 @@ def build_playlist_overview_announcement(
         has_first_artist = first_artist and first_artist not in ("アーティスト未設定", "Unknown", "unknown")
 
         if len(artists_raw) == 1:
-            # 単一アーティスト（例: ビートルズのみ）
             artist_name = artists_raw[0]
             if theme_ja and theme_ja.lower() not in artist_name.lower():
-                intro = f"「{theme_ja}」から、{artist_name}の楽曲全{total_count}曲をセレクトしました。"
+                intro = f"「{theme_ja}」から、{vibe_info['vibe_ja']}を中心に、{artist_name}の楽曲全{total_count}曲をセレクトしました。"
             else:
-                intro = f"{artist_name}の代表曲全{total_count}曲をセレクトしました。"
-            # 単一アーティストの場合は1曲目のアーティスト名を省略してスッキリ
+                intro = f"{artist_name}の楽曲から、{vibe_info['vibe_ja']}を中心に全{total_count}曲をセレクトしました。"
             track_part = f"まずは1曲目、『{first_title}』からお届けします。"
-        elif len(artists_raw) == 2:
-            # 2アーティスト
-            a1, a2 = artists_raw[0], artists_raw[1]
+        elif len(artists_raw) >= 2:
+            a_str = f"{artists_raw[0]}や{artists_raw[1]}"
             if theme_ja:
-                intro = f"「{theme_ja}」から、{a1}や{a2}などの名曲全{total_count}曲をセレクトしました。"
+                intro = f"「{theme_ja}」から、{vibe_info['vibe_ja']}を中心に全{total_count}曲をセレクトしました。{a_str}などの名曲が揃っています。"
             else:
-                intro = f"{a1}や{a2}などの楽曲全{total_count}曲をセレクトしました。"
-            track_part = f"まずは1曲目、『{first_title}』{f'（{first_artist}）' if has_first_artist else ''}からお届けします。"
-        elif len(artists_raw) >= 3:
-            # 3人以上
-            a1, a2 = artists_raw[0], artists_raw[1]
-            if theme_ja:
-                intro = f"「{theme_ja}」から、{a1}や{a2}をはじめとする名曲全{total_count}曲をセレクトしました。"
-            else:
-                intro = f"{a1}や{a2}をはじめとするアーティストの名曲全{total_count}曲をセレクトしました。"
+                intro = f"{a_str}などをはじめとする、{vibe_info['vibe_ja']}を中心に全{total_count}曲をセレクトしました。"
             track_part = f"まずは1曲目、『{first_title}』{f'（{first_artist}）' if has_first_artist else ''}からお届けします。"
         else:
-            # アーティスト情報なし
             if theme_ja:
-                intro = f"「{theme_ja}」に合わせた楽曲全{total_count}曲をセレクトしました。"
+                intro = f"「{theme_ja}」に合わせた、{vibe_info['vibe_ja']}を中心に全{total_count}曲をセレクトしました。"
             else:
-                intro = f"おすすめの楽曲全{total_count}曲をセレクトしました。"
+                intro = f"{vibe_info['vibe_ja']}を中心に全{total_count}曲をセレクトしました。"
             track_part = f"まずは1曲目、『{first_title}』からお届けします。"
 
         announcement = f"{intro} {track_part}"
         if clean_desc:
             announcement += f" {clean_desc}"
-        print(f"📖 [日本語 選曲俯瞰ナレーション (Template)] {announcement}", flush=True)
+        print(f"📖 [日本語 選曲俯瞰・雰囲気ナレーション (Template)] {announcement}", flush=True)
         return announcement
 
 

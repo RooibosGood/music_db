@@ -315,15 +315,15 @@ LLM サーバーが停止している場合や JSON 解析に失敗した場合�
 
 曲紹介アナウンスは **英語DJモード (`--lang en` / `--en`, デフォルト)** および **日本語モード (`--lang ja` / `--ja`)** に対応しています。
 
-#### 1. 選曲時の全体俯瞰ナレーション生成 (`build_playlist_overview_announcement`)
-選曲時（`play_search`）に、キューに追加された曲群（プレイリスト）全体の特徴（選曲テーマ、主なアーティスト、ジャンル、曲数）を俯瞰したオープニングコメントと1曲目の紹介を自然に組み立てます。
+#### 1. 選曲時の全体俯瞰＆雰囲気コメントナレーション生成 (`build_playlist_overview_announcement`)
+選曲時（`play_search`）に、キューに追加された曲群（プレイリスト）全体の特徴（エネルギーレベル、ムード、ジャンル、ハイレゾ比率、アーティスト構成、各曲の解説文）を `analyze_playlist_vibe()` で解析し、**「どのような雰囲気・世界観の曲が集まったのか」を的確にコメントした上で1曲目を紹介するオープニングナレーション**を自然に組み立てます。
 
 - **日本語モード (VOICEVOX)**:
-  - 単一アーティスト例: `「ビートルズの代表曲全15曲をセレクトしました。まずは1曲目、『Let It Be』からお届けします。1970年のラストアルバム表題曲です。」`
-  - 複数アーティスト/ジャンル例: `「『ジャズ』から、デイヴ・ブルーベックやマイルス・デイヴィスなどの名曲全15曲をセレクトしました。まずは1曲目、『Take Five』（デイヴ・ブルーベック）からお届けします。1959年の名盤『Time Out』収録の代表曲です。」`
-  - llama.cpp LLM が利用可能な場合は、より臨場感あふれるラジオ番組風のイントロを動的に生成し、タイムアウト・オフライン時は洗練されたテンプレートで即座にフォールバック合成。
+  - 単一アーティスト例: `「ビートルズの楽曲から、味わい深いメロディと心地よいビートが楽しめる名作ロックを中心に全15曲をセレクトしました。まずは1曲目、『Let It Be』からお届けします。1970年のラストアルバム表題曲です。」`
+  - 複数アーティスト/ジャンル例: `「『ジャズ』から、静かで落ち着いた夜に似合う、ゆったりとしたリラックスジャズを中心に全15曲をセレクトしました。Dave BrubeckやMiles Davisなどの名曲が揃っています。まずは1曲目、『Take Five』（Dave Brubeck）からお届けします。1959年の名盤『Time Out』収録の代表曲です。」`
+  - llama.cpp LLM が利用可能な場合は、選曲された曲群の雰囲気・ムードを分析したFMラジオDJ風のトークを動的に生成し、タイムアウト・オフライン時は洗練されたテンプレートで即座にフォールバック合成。
 - **英語DJモード (edge-tts)**:
-  - 例: `I've lined up 15 great jazz tracks featuring Dave Brubeck and Miles Davis. Let's get started with 'Take Five' by Dave Brubeck. A 1959 jazz standard in 5/4 time.`
+  - 例: `I've selected 15 tracks featuring Dave Brubeck, Miles Davis, and more—a calm and mellow jazz selection perfect for unwinding. Let's get started with 'Take Five' by Dave Brubeck. A 1959 jazz standard in 5/4 time.`
 
 #### 2. 単曲・トラック自動切り替わりアナウンス (`build_english_track_announcement`, `build_japanese_track_announcement`)
 - スキップ時や 2曲目以降の自動再生遷移時には、単曲ごとの背景・解説をスマートに紹介（例: `Next up is '...' by ...` / `「続いては、『...』をお届けします。」`）。
