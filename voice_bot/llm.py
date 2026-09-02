@@ -227,19 +227,12 @@ def process_user_message(
                 reply_text = tts.build_japanese_track_announcement(track_info, description=description, prefix=prefix)
             print(f"📖 [音声案内テキスト] {reply_text}", flush=True)
 
-    # 4. 音声読み上げと moOde 音楽再生の順序制御（解説文を話し終えてから再生・ReplayGain反映待機）
+    # 4. 音声読み上げと moOde 音楽再生の順序制御（先に曲をセット ➔ 曲紹介アナウンス ➔ 発話完了後に再生開始）
     needs_playback = control_res.get("needs_playback", False)
     select_start_time = time.time()
 
-    def trigger_playback_start(select_time: float):
-        """選曲・キュー投入後の ReplayGain 反映待ち（PLAY_DELAY_SEC秒）を確保して moOde の音楽再生を開始"""
-        elapsed = time.time() - select_time
-        remaining_delay = max(0.0, config.PLAY_DELAY_SEC - elapsed)
-        if remaining_delay > 0.1:
-            broadcast_process_status("playing", f"⏳ ReplayGain 適用待機中 ({remaining_delay:.1f}秒)...")
-            print(f"⏳ [moOde] ReplayGain 反映待機中: {remaining_delay:.1f}秒 スリープ...", flush=True)
-            time.sleep(remaining_delay)
-
+    def start_moode_playback():
+        """moOde の音楽再生を開始 (mpd_cli.play())"""
         mpd_cli = mpd_client.get_mpd_client()
         if mpd_cli:
             try:
@@ -247,10 +240,20 @@ def process_user_message(
                 mpd_cli.play()
                 mpd_cli.close()
                 mpd_cli.disconnect()
-                print("▶️ [moOde] 音楽再生を開始しました。", flush=True)
+                print("▶️ [moOde] 音楽再生を開始しました (ReplayGain 適用済み)。", flush=True)
                 broadcast_status()
             except Exception as e:
                 print(f"⚠️ [moOde] 再生開始エラー: {e}")
+
+    def trigger_playback_start(select_time: float):
+        """音声発話なし時の ReplayGain 反映待ち（PLAY_DELAY_SEC秒）を確保して moOde の音楽再生を開始"""
+        elapsed = time.time() - select_time
+        remaining_delay = max(0.0, config.PLAY_DELAY_SEC - elapsed)
+        if remaining_delay > 0.1:
+            broadcast_process_status("playing", f"⏳ ReplayGain 適用待機中 ({remaining_delay:.1f}秒)...")
+            print(f"⏳ [moOde] ReplayGain 反映待機中: {remaining_delay:.1f}秒 スリープ...", flush=True)
+            time.sleep(remaining_delay)
+        start_moode_playback()
 
     if speak_voice:
         def speak_and_play_flow():
@@ -265,7 +268,9 @@ def process_user_message(
                 print(f"⚠️ [TTS] 発話処理エラー (再生は継続): {tts_err}")
             finally:
                 if needs_playback:
-                    trigger_playback_start(select_start_time)
+                    # 曲紹介アナウンスが完全に終了した直後に音楽再生をスタート！
+                    print("🎙️ [TTS] 曲紹介アナウンス完了 ➔ 音楽再生を開始します。", flush=True)
+                    start_moode_playback()
                 else:
                     broadcast_process_status("idle", "🎙️ 音声待機中 (「ヘイ、マスター」)")
 

@@ -398,6 +398,11 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
     global last_announced_file, last_announced_songid
     try:
         if action == "play_search":
+            # 先に音楽を停止してキューを初期化（自動再生の暴発を防止）
+            try:
+                client.stop()
+            except Exception:
+                pass
             client.clear()
 
             print(f"🔍 [music_meta.db] 楽曲検索中: query='{query}'", flush=True)
@@ -409,6 +414,12 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 _broadcast("moode", f"🎵 moOde 再生キューを更新中 ({len(db_tracks)}曲をセット)...")
                 added_tracks = add_db_tracks_to_mpd(client, db_tracks)
                 added_count = len(added_tracks)
+
+                # 曲追加後も確実に一時停止/待機状態を維持（ReplayGain読み込み＆曲紹介完了待ち）
+                try:
+                    client.pause(1)
+                except Exception:
+                    pass
 
                 # MPD追加成功曲があればそれをベースに、なければDB検索1件目を使用
                 first_track = added_tracks[0] if added_tracks else db_tracks[0]
