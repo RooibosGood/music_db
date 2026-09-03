@@ -373,27 +373,77 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
             params.extend([f"%{g}%" for g in matched_genres])
 
         # 2. ハイレゾ判定
-        if any(k in clean_q.lower() for k in ["ハイレゾ", "hires", "hi-res", "高音質"]):
+        is_hires_req = any(k in clean_q.lower() for k in ["ハイレゾ", "hires", "hi-res", "高音質"])
+        if is_hires_req:
             conditions.append("is_hires = 1")
 
         # 3. エネルギー / 気分判定 (日英対応)
-        if any(k in clean_q.lower() for k in ["静か", "落ち着", "リラックス", "穏やか", "眠", "バラード", "癒", "calm", "relax", "quiet", "peaceful", "sleep", "slow"]):
+        is_cafe = any(k in clean_q.lower() for k in ["cafe", "カフェ", "喫茶"])
+        is_relax = any(k in clean_q.lower() for k in ["静か", "落ち着", "リラックス", "穏やか", "眠", "バラード", "癒", "calm", "relax", "relaxing", "quiet", "peaceful", "sleep", "slow"])
+        is_upbeat = any(k in clean_q.lower() for k in ["元気", "激し", "アップテンポ", "ノリ", "ドライブ", "テンション", "energetic", "upbeat", "fast", "party", "drive"])
+
+        if is_relax or is_cafe:
             conditions.append("(energy_level <= 2 OR mood LIKE '%Calm%' OR mood LIKE '%Relax%')")
-        elif any(k in clean_q.lower() for k in ["元気", "激し", "アップテンポ", "ノリ", "ドライブ", "テンション", "energetic", "upbeat", "fast", "party", "drive"]):
+        elif is_upbeat:
             conditions.append("(energy_level >= 4 OR mood LIKE '%Energetic%' OR mood LIKE '%Upbeat%')")
 
-        # 4. 邦楽 / 洋楽判定
+        # 4. 年代判定 (80年代, 90年代, 70年代 等)
+        if re.search(r"\b80'?s\b|80年代", clean_q, flags=re.IGNORECASE):
+            conditions.append("release_year BETWEEN 1980 AND 1989")
+        elif re.search(r"\b90'?s\b|90年代", clean_q, flags=re.IGNORECASE):
+            conditions.append("release_year BETWEEN 1990 AND 1999")
+        elif re.search(r"\b70'?s\b|70年代", clean_q, flags=re.IGNORECASE):
+            conditions.append("release_year BETWEEN 1970 AND 1979")
+        elif re.search(r"\b60'?s\b|60年代", clean_q, flags=re.IGNORECASE):
+            conditions.append("release_year BETWEEN 1960 AND 1969")
+        elif re.search(r"\b2000'?s\b|2000年代", clean_q, flags=re.IGNORECASE):
+            conditions.append("release_year BETWEEN 2000 AND 2009")
+
+        # 5. 邦楽 / 洋楽判定
         if any(k in clean_q.lower() for k in ["邦楽", "j-pop", "jpop", "日本の曲", "日本語", "japanese"]):
             conditions.append("music_category = '邦楽'")
         elif any(k in clean_q.lower() for k in ["洋楽", "海外", "western", "english"]):
             conditions.append("music_category = '洋楽'")
 
-        # 5. 一般キーワード（アーティスト名、曲名、アルバム名、解説文）
-        keyword_q = clean_q
-        if keyword_q and not matched_genres:
-            words = keyword_q.split()
+        # 6. 一般キーワード（アーティスト名、曲名、アルバム名、解説文）
+        # ジャンル、ムード、年代、ハイレゾ、ストップワード等の属性表現を除去した残りを固有キーワードとする
+        kw_target = clean_q
+        ja_phrases = [
+            "落ち着いた", "落ち着く", "リラックスできる", "リラックス", "静かな", "静か",
+            "穏やかな", "穏やか", "眠れる", "眠い", "癒しの", "癒し", "バラード", "カフェ", "喫茶",
+            "ノリの良い", "ノリのいい", "テンポの良い", "テンポのいい", "元気な", "元気の出る", "元気",
+            "激しい", "テンションの上がる", "ドライブ",
+            "ハイレゾ音源", "ハイレゾ", "高音質",
+            "80年代", "90年代", "70年代", "60年代", "2000年代",
+            "日本の曲", "日本語の曲", "邦楽", "洋楽",
+            "おすすめの曲", "おすすめ", "ランダム", "何か", "なに", "いい感じの", "いい感じ"
+        ]
+        for jp in sorted(ja_phrases, key=len, reverse=True):
+            kw_target = kw_target.replace(jp, " ")
+
+        filter_stop_words = {
+            "play", "some", "me", "put", "on", "listen", "to", "please",
+            "music", "song", "songs", "track", "tracks", "audio", "sound", "sounds",
+            "relax", "relaxing", "calm", "quiet", "peaceful", "sleep", "slow", "cafe", "lounge",
+            "upbeat", "energetic", "fast", "party", "drive",
+            "hires", "hi-res",
+            "japanese", "western", "english", "pop",
+            "80s", "90s", "70s", "60s", "2000s", "80's", "90's", "70's",
+            "曲", "音楽", "音源", "かけて", "流して", "再生して", "聴きたい", "聴かせて", "の曲", "の", "で", "を", "に",
+        }
+
+        raw_words = re.findall(r"[\w'-]+|[^\s\w]+", kw_target)
+        specific_words = [
+            w.strip() for w in raw_words
+            if w.lower().strip() not in filter_stop_words
+            and not any(w.lower().strip() == g.lower() for g in genre_keywords)
+            and len(w.strip()) > 1
+            and not re.match(r"^[\s、。！？!?,.\-_/]+$", w)
+        ]
+
+        if specific_words:
             kw_conditions = []
-            for w in words:
+            for w in specific_words:
                 kw_conditions.append("(title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?)")
                 params.extend([f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%", f"%{w}%"])
             if kw_conditions:
@@ -417,15 +467,36 @@ def search_tracks_from_db(query: str, limit: int = 15) -> List[Dict[str, Any]]:
         filtered_rows = [r for r in rows if r["id"] not in recent_ids]
         candidate_rows = filtered_rows if len(filtered_rows) >= limit else rows
 
-        # ヒットしなかった場合、キーワードの部分一致でフォールバック
-        if not candidate_rows and keyword_q:
+        # ヒットしなかった場合、固有キーワードの部分一致、または属性（ムード・ハイレゾ）ベースでフォールバック
+        if not candidate_rows and specific_words:
+            first_kw = specific_words[0]
             cur.execute(f"""
                 SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
                 FROM tracks
                 WHERE title LIKE ? OR artist LIKE ? OR album LIKE ? OR description_ja LIKE ? OR description_en LIKE ?
                 ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
                 LIMIT 50;
-            """, (f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%", f"%{keyword_q}%"))
+            """, (f"%{first_kw}%", f"%{first_kw}%", f"%{first_kw}%", f"%{first_kw}%", f"%{first_kw}%"))
+            candidate_rows = [dict(r) for r in cur.fetchall()]
+
+        # ムードやハイレゾ等の属性指定があればそれを優先してフォールバック
+        if not candidate_rows and (is_relax or is_cafe):
+            cur.execute("""
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
+                FROM tracks
+                WHERE (energy_level <= 2 OR mood LIKE '%Calm%' OR mood LIKE '%Relax%')
+                ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
+                LIMIT 50;
+            """)
+            candidate_rows = [dict(r) for r in cur.fetchall()]
+        elif not candidate_rows and is_hires_req:
+            cur.execute("""
+                SELECT id, title, artist, title_en, artist_en, album, relative_path, file_path, genre, mood, energy_level, is_hires, rating, description_ja, description_en
+                FROM tracks
+                WHERE is_hires = 1
+                ORDER BY (CASE WHEN (description_ja IS NOT NULL AND description_ja != '') OR (description_en IS NOT NULL AND description_en != '') THEN 0 ELSE 1 END), RANDOM()
+                LIMIT 50;
+            """)
             candidate_rows = [dict(r) for r in cur.fetchall()]
 
         # それでもヒットしない場合、解説文付きの曲からランダムに取得

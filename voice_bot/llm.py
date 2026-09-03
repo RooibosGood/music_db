@@ -145,7 +145,8 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
     play_triggers = [
         "かけて", "流して", "再生", "聴きたい", "聴かせて", "play", "put on", "listen to",
         "ジャズ", "jazz", "ロック", "rock", "クラシック", "classic", "ポップ", "pop",
-        "ブルース", "blues", "ハイレゾ", "hires", "hi-res", "静か", "落ち着", "calm"
+        "ブルース", "blues", "ハイレゾ", "hires", "hi-res", "静か", "落ち着", "calm",
+        "リラックス", "relax", "cafe", "カフェ", "喫茶", "癒し", "バラード", "upbeat", "ノリ"
     ]
     if any(k in lower_text for k in play_triggers):
         query = user_text
@@ -154,7 +155,7 @@ def parse_intent_with_llm(user_text: str) -> Dict[str, Any]:
             query = query.replace(sw, "")
         # 英語プレフィックス・サフィックスの除去
         query = re.sub(r"^(?:play\s+(?:some\s+|me\s+)?|put\s+on\s+|listen\s+to\s+)", "", query, flags=re.IGNORECASE)
-        query = re.sub(r"\s+(?:please|music|song|songs)$", "", query, flags=re.IGNORECASE)
+        query = re.sub(r"\s+(?:please|music|song|songs|track|tracks)$", "", query, flags=re.IGNORECASE)
         query = query.strip()
 
         display_q = query or "おすすめの曲"
