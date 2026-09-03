@@ -2,7 +2,8 @@
   "demo_mode": false,
   "moode": {
     "ip": "192.168.68.198",
-    "port": 6600
+    "port": 6600,
+    "pre_decode_delay_sec": 0.35
   },
   "llm": {
     "model": "google_gemma-4-E2B-it-Q4_K_M.gguf",

@@ -232,12 +232,12 @@ def process_user_message(
     select_start_time = time.time()
 
     def start_moode_playback():
-        """moOde の音楽再生を開始 (mpd_cli.play())"""
+        """moOde の音楽再生を開始 (mpd_client.safe_start_playback)"""
         mpd_cli = mpd_client.get_mpd_client()
         if mpd_cli:
             try:
                 broadcast_process_status("playing", "▶️ moOde 音楽再生をスタートしました", auto_idle_sec=3.5)
-                mpd_cli.play()
+                mpd_client.safe_start_playback(mpd_cli)
                 mpd_cli.close()
                 mpd_cli.disconnect()
                 print("▶️ [moOde] 音楽再生を開始しました (ReplayGain 適用済み)。", flush=True)

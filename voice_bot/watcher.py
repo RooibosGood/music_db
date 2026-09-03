@@ -237,7 +237,7 @@ def run_track_watcher_loop():
             if mpd_cli:
                 try:
                     broadcast_process_status("playing", f"▶️ 音楽再生を再開しました: {t_title}", auto_idle_sec=3.5)
-                    mpd_cli.play()
+                    mpd_client.safe_start_playback(mpd_cli)
                     mpd_cli.close()
                     mpd_cli.disconnect()
                     print("▶️ [moOde] 曲紹介完了後に音楽再生を再開しました。", flush=True)
