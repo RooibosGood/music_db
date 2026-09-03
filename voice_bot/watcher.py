@@ -226,12 +226,12 @@ def run_track_watcher_loop():
                 broadcast_process_status("tts", f"🎙️ 曲紹介アナウンス中: {t_title}")
                 tts.speak(announce_text)
 
-            # 4. 発話完了後に ReplayGain 反映待ち時間を確保して音楽再生を再開
-            elapsed = time.time() - switch_time
-            remaining_delay = max(0.0, config.PLAY_DELAY_SEC - elapsed)
-            if remaining_delay > 0.1:
-                broadcast_process_status("playing", f"⏳ ReplayGain 適用待機中 ({remaining_delay:.1f}秒)...")
-                time.sleep(remaining_delay)
+            # 4. 発話完了後に音楽再生を再開 (safe_start_playback により ReplayGain 適用済みで開始)
+            if getattr(config, "PLAY_DELAY_SEC", 0.0) > 0.1:
+                elapsed = time.time() - switch_time
+                remaining_delay = max(0.0, config.PLAY_DELAY_SEC - elapsed)
+                if remaining_delay > 0.1:
+                    time.sleep(remaining_delay)
 
             mpd_cli = mpd_client.get_mpd_client()
             if mpd_cli:

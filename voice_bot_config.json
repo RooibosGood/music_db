@@ -3,6 +3,7 @@
   "moode": {
     "ip": "192.168.68.198",
     "port": 6600,
+    "replaygain_mode": "track",
     "pre_decode_delay_sec": 0.35
   },
   "llm": {

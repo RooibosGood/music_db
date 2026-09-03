@@ -15,8 +15,9 @@ DEMO_MODE: bool = False  # moOde実機なしで選曲・再生・解説・ステ
 # ==================== moOde / MPD 設定 ====================
 MOODE_IP: str = "192.168.68.198"  # moOde (Raspberry Pi 5) の IP アドレス
 MOODE_PORT: int = 6600
-PLAY_DELAY_SEC: float = 3.0  # 曲選択から再生開始までの待機時間（ReplayGainタグ反映待ち）
+PLAY_DELAY_SEC: float = 0.0  # 曲選択から再生開始までの追加待機時間（safe_start_playback により自動制御）
 PRE_DECODE_DELAY_SEC: float = 0.35  # ReplayGainタグ解析遅延によるバースト防止用プリデコード待機時間（秒）
+REPLAYGAIN_MODE: str = "track"  # MPD ReplayGain モード ("track", "album", "auto", "off")
 MUSIC_DIR: Optional[str] = "/mnt/music" if os.name != "nt" else None  # Jetson上のNASマウント先（デフォルト: /mnt/music）
 
 # ==================== 音声合成 / LLM 設定 ====================
@@ -127,6 +128,10 @@ def load_config_from_file(config_path: Optional[str] = None) -> Optional[str]:
             PRE_DECODE_DELAY_SEC = float(moode_cfg["pre_decode_delay_sec"])
         elif "pre_decode_delay_sec" in data:
             PRE_DECODE_DELAY_SEC = float(data["pre_decode_delay_sec"])
+        if "replaygain_mode" in moode_cfg:
+            REPLAYGAIN_MODE = str(moode_cfg["replaygain_mode"]).lower()
+        elif "replaygain_mode" in data:
+            REPLAYGAIN_MODE = str(data["replaygain_mode"]).lower()
         if "music_dir" in moode_cfg:
             MUSIC_DIR = str(moode_cfg["music_dir"])
 
@@ -205,6 +210,7 @@ def get_current_settings() -> dict:
             "port": MOODE_PORT,
             "play_delay_sec": PLAY_DELAY_SEC,
             "pre_decode_delay_sec": PRE_DECODE_DELAY_SEC,
+            "replaygain_mode": REPLAYGAIN_MODE,
             "music_dir": MUSIC_DIR,
         },
         "announcement": {
@@ -290,6 +296,9 @@ def save_config_to_file(updates: dict) -> bool:
         if "pre_decode_delay_sec" in updates["moode"]:
             PRE_DECODE_DELAY_SEC = float(updates["moode"]["pre_decode_delay_sec"])
             moode_cfg["pre_decode_delay_sec"] = PRE_DECODE_DELAY_SEC
+        if "replaygain_mode" in updates["moode"]:
+            REPLAYGAIN_MODE = str(updates["moode"]["replaygain_mode"]).lower()
+            moode_cfg["replaygain_mode"] = REPLAYGAIN_MODE
         if "music_dir" in updates["moode"]:
             MUSIC_DIR = str(updates["moode"]["music_dir"]) if updates["moode"]["music_dir"] else None
             moode_cfg["music_dir"] = MUSIC_DIR

@@ -247,13 +247,12 @@ def process_user_message(
                 print(f"⚠️ [moOde] 再生開始エラー: {e}")
 
     def trigger_playback_start(select_time: float):
-        """音声発話なし時の ReplayGain 反映待ち（PLAY_DELAY_SEC秒）を確保して moOde の音楽再生を開始"""
-        elapsed = time.time() - select_time
-        remaining_delay = max(0.0, config.PLAY_DELAY_SEC - elapsed)
-        if remaining_delay > 0.1:
-            broadcast_process_status("playing", f"⏳ ReplayGain 適用待機中 ({remaining_delay:.1f}秒)...")
-            print(f"⏳ [moOde] ReplayGain 反映待機中: {remaining_delay:.1f}秒 スリープ...", flush=True)
-            time.sleep(remaining_delay)
+        """音声発話なし時の音楽再生開始（safe_start_playback により ReplayGain 適用済みで開始）"""
+        if getattr(config, "PLAY_DELAY_SEC", 0.0) > 0.1:
+            elapsed = time.time() - select_time
+            remaining_delay = max(0.0, config.PLAY_DELAY_SEC - elapsed)
+            if remaining_delay > 0.1:
+                time.sleep(remaining_delay)
         start_moode_playback()
 
     if speak_voice:

@@ -221,6 +221,7 @@ class MockMPDClient:
 
     def __init__(self):
         self.player = demo_player
+        self.replaygain_mode_val = "track"
 
     def connect(self, host: str, port: int):
         pass
@@ -272,6 +273,15 @@ class MockMPDClient:
 
     def command_list_end(self):
         pass
+
+    def replay_gain_mode(self, mode: str):
+        self.replaygain_mode_val = str(mode)
+
+    def replay_gain_status(self) -> Dict[str, str]:
+        return {"replay_gain_mode": self.replaygain_mode_val}
+
+    def update(self) -> int:
+        return 1
 
 
 def get_mpd_client() -> Optional[Any]:
@@ -373,24 +383,76 @@ def get_moode_status() -> Dict[str, Any]:
         }
 
 
+def ensure_replaygain_mode(client: Optional[Any] = None) -> str:
+    """MPD の ReplayGain モードを確認し、目標モード（config.REPLAYGAIN_MODE: デフォルト 'track'）を送信・有効化する。"""
+    own_client = False
+    if client is None:
+        client = get_mpd_client()
+        if client is None:
+            return "off"
+        own_client = True
+
+    try:
+        target_mode = getattr(config, "REPLAYGAIN_MODE", "track").lower()
+        status = client.replay_gain_status()
+        current_mode = status.get("replay_gain_mode", "").lower()
+        if current_mode != target_mode:
+            client.replay_gain_mode(target_mode)
+            print(f"🎚️ [moOde] MPD ReplayGain モードを '{current_mode}' ➔ '{target_mode}' に更新・有効化しました。", flush=True)
+            return target_mode
+        return current_mode
+    except Exception as e:
+        # モックまたは非対応環境
+        return getattr(config, "REPLAYGAIN_MODE", "track")
+    finally:
+        if own_client:
+            try:
+                client.close()
+                client.disconnect()
+            except Exception:
+                pass
+
+
+def update_mpd_database() -> Dict[str, Any]:
+    """MPD にライブラリ更新（mpc update）を要求し、ReplayGain タグ等の最新メタデータを再読み込みさせる"""
+    client = get_mpd_client()
+    if client is None:
+        return {"success": False, "message": "MPD に接続できませんでした。"}
+    try:
+        job_id = client.update()
+        print(f"🔄 [moOde] MPD ライブラリ更新を開始しました (job id: {job_id})", flush=True)
+        return {"success": True, "job_id": job_id, "message": f"MPD ライブラリ更新を開始しました (job: {job_id})"}
+    except Exception as e:
+        print(f"⚠️ [moOde] MPD update エラー: {e}", flush=True)
+        return {"success": False, "message": str(e)}
+    finally:
+        try:
+            client.close()
+            client.disconnect()
+        except Exception:
+            pass
+
+
 def safe_start_playback(
     client: Optional[Any] = None,
     pos: Optional[int] = None,
     pre_decode_delay_sec: Optional[float] = None,
 ) -> bool:
-    """曲頭の音量飛び出し（ReplayGainタグ読み込み遅延によるバースト）を防止する安全な再生開始処理。
-    （パターン2：ポーズ投入 ＋ 短縮ディレイ解除方式）
+    """ReplayGain を確実に適用し、曲頭の音量飛び出しを完全防止する安全な再生開始処理。
+    （ReplayGain 有効化 ＋ 初期ボリューム一時消音・復帰方式）
 
     シーケンス:
-    1. 現在の再生状態を確認。
+    1. MPD の ReplayGain モードが確実に有効化 ('track' 等) されていることを確認・設定。
+    2. 現在の再生状態を確認。
        - すでに一時停止（pause）状態の場合:
-         曲選択時またはアナウンス中に事前ポーズが投入されており、ヘッダ/タグ解析は完了しているため、
-         即座に pause(0) で DAC への PCM 出力を開始。
-       - 停止（stop）状態の場合:
-         command_list を用いて play(pos) 直後に pause(1) をアトミックに投入し、
-         DAC出力を保留した状態でデコーダおよびヘッダ解析スレッドのみを先行起動。
-         短時間待機（pre_decode_delay_sec）後、pause(0) で DAC 出力を開始。
-    2. エラー発生時は try-finally / except で安全に stop() を試行し、ハングアップを防止。
+         一時停止を解除（pause 0）して再生を再開。
+       - 停止（stop）状態からの再生開始:
+         a. 現在の音量を退避（orig_vol）。
+         b. 一時的に音量を 0 (完全消音) に設定し、ReplayGain未補正の曲頭PCM出力を遮断。
+         c. play(pos) で再生を開始（MPDのデコーダが起動し、ReplayGainヘッダ解析とスケール演算を開始）。
+         d. 完全な無音状態で ReplayGain タグ解析完了まで微小待機（pre_decode_delay_sec: 0.35秒）。
+         e. 本来の音量（orig_vol）に復帰。第1サンプルから ReplayGain が100%適用された状態で音楽がスタート。
+    3. ボリューム制御不可（Bit-perfect / mixerなし）環境時は、アトミックポーズ方式に自動フォールバック。
     """
     delay = pre_decode_delay_sec if pre_decode_delay_sec is not None else getattr(config, "PRE_DECODE_DELAY_SEC", 0.35)
     own_client = False
@@ -402,6 +464,9 @@ def safe_start_playback(
         own_client = True
 
     try:
+        # 1. MPD の ReplayGain モードが有効化されていることを保証
+        ensure_replaygain_mode(client)
+
         status = {}
         try:
             status = client.status()
@@ -411,17 +476,42 @@ def safe_start_playback(
         state = status.get("state", "stop")
 
         if state == "pause":
-            # すでに一時停止状態（事前ポーズ済み）：タグ解析は完了しているため即座に解除
             client.pause(0)
-            print("▶️ [moOde] 一時停止を解除して再生を開始しました (ReplayGain事前適用済み)。", flush=True)
+            print("▶️ [moOde] 一時停止を解除して再生を開始しました (ReplayGain適用中)。", flush=True)
             return True
 
-        elif state == "play":
-            # すでに再生中
+        elif state == "play" and pos is None:
             return True
 
-        # stop 状態からの再生開始:
-        # 1. play 直後に pause 1 を送ることで、デコーダを立ち上げつつPCM出力を保留
+        # stop 状態（または pos 指定での新規再生開始）:
+        vol_str = str(status.get("volume", "-1"))
+        has_volume = vol_str.isdigit() and int(vol_str) >= 0
+        orig_vol = int(vol_str) if has_volume else None
+
+        # ボリューム制御が利用可能な場合: 初期消音 ➔ play ➔ ディレイ ➔ 音量復帰
+        if has_volume and orig_vol is not None and orig_vol > 0:
+            try:
+                # A. 音量を 0 に設定（DACへのPCM出力を完全消音）
+                client.setvol(0)
+
+                # B. 再生を開始（デコーダ起動・ReplayGainヘッダ解析開始）
+                if pos is not None:
+                    client.play(int(pos))
+                else:
+                    client.play()
+
+                # C. 完全消音のまま ReplayGain 解析完了を待機
+                if delay > 0:
+                    time.sleep(delay)
+
+                # D. 本来の音量に復帰（ReplayGain が適用されたクリーンな音量でスタート）
+                client.setvol(orig_vol)
+                print(f"▶️ [moOde] ReplayGain 事前適用完了 (音量復帰: {orig_vol}%, 待機: {delay:.2f}秒)。", flush=True)
+                return True
+            except Exception as vol_err:
+                print(f"⚠️ [moOde] ボリューム一時消音フォールバック: {vol_err}", flush=True)
+
+        # ボリューム制御不可（Bit-perfect / mixerなし）時のフォールバック:
         try:
             client.command_list_ok_begin()
             if pos is not None:
@@ -431,7 +521,6 @@ def safe_start_playback(
             client.pause(1)
             client.command_list_end()
         except Exception:
-            # command_list 非対応環境または個別送信フォールバック
             if pos is not None:
                 client.play(int(pos))
             else:
@@ -441,18 +530,15 @@ def safe_start_playback(
             except Exception:
                 pass
 
-        # 2. ReplayGainタグ解析待機（短縮ディレイ）
         if delay > 0:
             time.sleep(delay)
 
-        # 3. ポーズを解除して DAC への PCM 出力を開始
         client.pause(0)
-        print(f"▶️ [moOde] プリデコード待機 ({delay:.2f}秒) 完了、安全に再生を開始しました (ReplayGain適用済み)。", flush=True)
+        print(f"▶️ [moOde] 再生を開始しました (ReplayGain有効化済み、待機: {delay:.2f}秒)。", flush=True)
         return True
 
     except Exception as e:
         print(f"❌ [safe_start_playback] 再生開始処理エラー: {e}", flush=True)
-        # 例外発生時にポーズ状態のままハングアップしないよう安全に停止
         try:
             client.stop()
         except Exception:
@@ -471,8 +557,8 @@ def play_single_track(
     file_path: str,
     pre_decode_delay_sec: Optional[float] = None,
 ) -> bool:
-    """単曲再生（キューのクリア -> 追加 -> ポーズ投入 -> 短縮ディレイ -> ポーズ解除）。
-    ReplayGainタグ読み込み遅延による曲頭バーストを防止する。
+    """単曲再生（キューのクリア -> 追加 -> safe_start_playback）。
+    ReplayGainを確実に適用し、曲頭の音量飛び出しを完全防止する。
     """
     delay = pre_decode_delay_sec if pre_decode_delay_sec is not None else getattr(config, "PRE_DECODE_DELAY_SEC", 0.35)
     client = get_mpd_client()
@@ -481,44 +567,15 @@ def play_single_track(
         return False
 
     try:
-        # 1. キューのクリア
         try:
             client.stop()
         except Exception:
             pass
         client.clear()
-
-        # 2. 楽曲の追加
         client.add(file_path)
-
-        # 3. 即座にポーズ状態でデコーダを立ち上げ
-        try:
-            client.command_list_ok_begin()
-            client.play(0)
-            client.pause(1)
-            client.command_list_end()
-        except Exception:
-            client.play(0)
-            try:
-                client.pause(1)
-            except Exception:
-                pass
-
-        # 4. タグ解析完了のための最小マージンとして短時間ウェイト
-        if delay > 0:
-            time.sleep(delay)
-
-        # 5. ポーズを解除してDACへのPCM出力を開始
-        client.pause(0)
-        print(f"▶️ [play_single_track] 単曲再生を開始しました: {file_path} (プリデコード待機: {delay:.2f}秒)", flush=True)
-        return True
-
+        return safe_start_playback(client, pos=0, pre_decode_delay_sec=delay)
     except Exception as e:
         print(f"❌ [play_single_track] 再生エラー: {e}", flush=True)
-        try:
-            client.stop()
-        except Exception:
-            pass
         return False
     finally:
         try:
@@ -579,18 +636,8 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                 added_tracks = add_db_tracks_to_mpd(client, db_tracks)
                 added_count = len(added_tracks)
 
-                # 曲追加後、即座にポーズ状態でデコーダを先行起動（ReplayGainヘッダ解析を開始）
-                try:
-                    client.command_list_ok_begin()
-                    client.play(0)
-                    client.pause(1)
-                    client.command_list_end()
-                except Exception:
-                    try:
-                        client.play(0)
-                        client.pause(1)
-                    except Exception:
-                        pass
+                # MPD の ReplayGain モードを確実に有効化
+                ensure_replaygain_mode(client)
 
                 # MPD追加成功曲があればそれをベースに、なければDB検索1件目を使用
                 first_track = added_tracks[0] if added_tracks else db_tracks[0]

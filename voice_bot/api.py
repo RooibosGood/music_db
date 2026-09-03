@@ -221,8 +221,16 @@ async def api_status():
         "language": config.ANNOUNCE_LANGUAGE,
         "demo_mode": config.DEMO_MODE,
         "llm_model": config.LLM_MODEL,
+        "replaygain_mode": getattr(config, "REPLAYGAIN_MODE", "track"),
         "enable_voice_listener": config.ENABLE_VOICE_LISTENER,
     })
+
+
+@app.post("/api/player/update_db")
+async def api_player_update_db():
+    """MPD ライブラリ更新 (mpc update) をトリガーし、ReplayGain タグ等を再スキャン"""
+    res = mpd_client.update_mpd_database()
+    return JSONResponse(res)
 
 
 @app.post("/api/player/control")

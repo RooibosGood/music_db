@@ -441,28 +441,31 @@ ProcessCommand --> Idle : 処理実行・返答
     - `----:com.apple.iTunes:WM/SharedUserRating` (`1`〜`99`)
     - `rate` (`20`〜`100`) を保存。
 
-### 5.9 ReplayGain 反映待機と選曲・アナウンス・再生シーケンス制御 (Pattern 2)
+### 5.9 ReplayGain 確実適用と再生シーケンス制御 (初期消音プレロール方式)
 
-音源ファイルに付与されている ReplayGain（音量均一化タグ）を moOde / MPD 側が確実に読み込み・反映する時間を確保し、NFSファイルヘッダ解析遅延による曲頭バースト（0 dB音量飛び出し）を防止するため、「**先に曲をセット ➔ デコーダを一時停止状態で立ち上げ（ヘッダ解析） ➔ 曲紹介アナウンス（または短縮ディレイ） ➔ ポーズ解除（PCM出力開始）**」という厳格なシーケンス制御を採用しています。
+音源ファイルに付与されている ReplayGain（音量均一化タグ）を moOde / MPD 側が確実に有効化・反映し、NFSファイルヘッダ解析遅延による曲頭バースト（0 dB音量飛び出し）を防止するため、「**MPD ReplayGain モード保証 ➔ 初期ボリューム一時消音 ➔ 再生開始 ➔ ヘッダ解析待機 ➔ 本来の音量へ復帰**」という安全かつ確実なシーケンス制御を採用しています。
 
 #### 1. 処理フローシーケンス
-1. **ステップ 1: 先に曲を moOde キューにセット & ポーズ先行投入 (`control_moode` / `play_single_track`)**
-   - `client.stop()` で現在の再生を即座に停止。
-   - `client.clear()` でキューを初期化し、選曲された楽曲（15曲）をキューに追加。
-   - **`command_list` によるアトミックな `play(0)` + `pause(1)` 投入**: MPDの仕様上 `stop` 状態での直接 `pause` は拒否されるため、再生開始コマンドとポーズコマンドを同時に送り、DACへのPCM出力を保留した状態でデコーダおよびメタデータ解析スレッドのみを先行起動します。
-   - moOde / MPD はこの待機時間中にNFS経由でファイルの ReplayGain タグを解析し、音量調整の準備を完了します。
-2. **ステップ 2: 曲紹介アナウンス（TTS音声合成・発話）**
-   - 音楽が一時停止（デコード準備完了）の状態で、選曲全体の雰囲気コメントおよび1曲目の解説トーク（VOICEVOX / edge-tts）を同期的に発話。
-   - 発話時間（約5〜15秒）により、ReplayGain の適用時間が確実に担保されます。
-3. **ステップ 3: アナウンス発話完了直後にポーズを解除 (`mpd_client.safe_start_playback()`)**
-   - 曲紹介が完全に鳴り終わった直後に `safe_start_playback()` を呼び出し、`client.pause(0)` により ReplayGain が適用された状態で音楽をスタート。
-   - ※音声発話なし（Webチャットで `speak=false` 等）の場合でも、`config.PRE_DECODE_DELAY_SEC`（デフォルト: 0.35秒）待機した後に `pause 0` で再生を開始します。
+1. **ステップ 1: MPD ReplayGain モードの常時保証 (`ensure_replaygain_mode`)**
+   - MPD 接続時および再生開始時、`client.replay_gain_status()` を確認。
+   - `replay_gain_mode` が `off` または未設定の場合、設定値（`config.REPLAYGAIN_MODE = "track"`）を自動送信して即座に有効化します。
+2. **ステップ 2: 初期ボリューム一時消音 ＋ デコーダ起動 (`safe_start_playback`)**
+   - 停止（stop）状態から再生を開始する際、現在の音量（例: 70%）を退避し、一時的に MPD 音量を `0%`（完全消音）に設定。
+   - 音量 0% の状態で `play()` を実行し、MPD のデコーダおよびファイルヘッダ解析スレッドを起動。
+   - ReplayGain タグ（Vorbis Comment / ID3v2）の解析と内部ゲインスケール演算が完了するまでの短時間（`config.PRE_DECODE_DELAY_SEC = 0.35` 秒）を完全無音で待機。
+3. **ステップ 3: 本来の音量へ復帰**
+   - ゲインスケール確定後、即座に本来の音量（例: 70%）へ復帰。**第1サンプルから ReplayGain が100%適用された状態で音楽がスタート**します。
+   - ※ボリューム制御不可（Bit-perfect / mixerなし）環境時は、アトミックポーズ方式に自動フォールバックします。
 
 #### 2. 提供関数
+- **`ensure_replaygain_mode(client=None)`**:
+  MPD の ReplayGain モードを確認し、目標モード（`"track"`）へ設定・有効化。
+- **`safe_start_playback(client=None, pos=None, pre_decode_delay_sec=None)`**:
+  ReplayGain 有効化 ＋ 初期消音プレロールによる安全な再生開始を一元制御。
 - **`play_single_track(file_path, pre_decode_delay_sec=None)`**:
-  単曲のキュークリア・追加・ポーズ投入・短縮ディレイ（350ms）・ポーズ解除を一括実行。
-- **`safe_start_playback(client, pos=0, pre_decode_delay_sec=None)`**:
-  状態を判定し、一時停止中なら即座に `pause 0`、停止中なら `play` + `pause 1` ➔ 待機 ➔ `pause 0` を安全に実行（try-finallyでハングアップ防止）。
+  単曲のキュークリア・追加・`safe_start_playback` を一括実行。
+- **`update_mpd_database()`**:
+  MPD ライブラリ更新（`mpc update`）を実行し、ReplayGain タグ変更を MPD 内部データベースへ反映。
 
 ---
 
@@ -540,7 +543,20 @@ ProcessCommand --> Idle : 処理実行・返答
 
 ---
 
-### 6.7 `POST /api/player/rate`
+### 6.7 `POST /api/player/update_db`
+- **概要**: MPD ライブラリ更新（`mpc update`）を実行し、新規に付与した ReplayGain タグ等を MPD 内部データベースへ反映。
+- **Response Body (JSON)**:
+  ```json
+  {
+    "success": true,
+    "job_id": 1,
+    "message": "MPD ライブラリ更新を開始しました (job: 1)"
+  }
+  ```
+
+---
+
+### 6.8 `POST /api/player/rate`
 - **概要**: 楽曲の評価（グッド👍 / バッド👎 または ★1〜5）を更新。
 - **Request Body (JSON)**:
   ```json
