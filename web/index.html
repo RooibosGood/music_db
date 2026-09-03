@@ -1955,6 +1955,12 @@
     @media (max-width: 992px) {
       header {
         padding: 8px 14px;
+        gap: 8px;
+        overflow: visible;
+      }
+      .brand {
+        gap: 8px;
+        min-width: 0;
       }
       .brand-text h1 {
         font-size: 1rem;
@@ -1962,6 +1968,20 @@
       .brand-text p {
         display: none;
       }
+
+      .header-status {
+        gap: 8px;
+        flex-shrink: 0;
+      }
+      .status-badge {
+        padding: 5px 10px;
+        font-size: 0.76rem;
+      }
+      .settings-btn, .power-btn {
+        padding: 6px 12px;
+        font-size: 0.8rem;
+      }
+
       .mobile-nav-tabs {
         display: flex;
       }
@@ -1994,6 +2014,138 @@
       /* モバイルかつチャット画面表示時にミニプレイヤーを表示 */
       .mobile-mini-player {
         display: block;
+      }
+    }
+
+    /* Smartphone Header & Responsive (<= 768px) */
+    @media (max-width: 768px) {
+      header {
+        padding: 6px 10px;
+        gap: 6px;
+      }
+
+      .brand {
+        gap: 6px;
+        min-width: 0;
+        flex-shrink: 1;
+      }
+      .brand-icon {
+        width: 30px;
+        height: 30px;
+        font-size: 15px;
+        border-radius: var(--radius-sm);
+        flex-shrink: 0;
+      }
+      .brand-text {
+        min-width: 0;
+      }
+      .brand-text h1 {
+        font-size: 0.88rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 125px;
+      }
+
+      .header-status {
+        gap: 6px;
+        flex-shrink: 0;
+      }
+
+      /* ステータスバッジ: テキストを隠してステータスドットのみ表示 */
+      .status-badge {
+        padding: 6px 7px;
+        min-width: 22px;
+        justify-content: center;
+        gap: 0;
+        cursor: help;
+      }
+      .status-badge-text {
+        display: none;
+      }
+
+      /* 音声読み上げトグル: テキストを隠してスピーカーアイコン＋ミニトグル */
+      .header-voice-toggle {
+        gap: 4px;
+        font-size: 0.82rem;
+      }
+      .header-voice-toggle .toggle-label-text {
+        display: none;
+      }
+      .header-voice-toggle .toggle-switch {
+        width: 28px;
+        height: 16px;
+      }
+      .header-voice-toggle .toggle-switch::after {
+        width: 12px;
+        height: 12px;
+        top: 2px;
+        left: 2px;
+      }
+      .header-voice-toggle input[type="checkbox"]:checked + .toggle-switch::after {
+        transform: translateX(12px);
+      }
+
+      /* 設定ボタン & 電源ボタン: スマホ画面上部に確実に表示 */
+      .settings-btn, .power-btn {
+        padding: 5px 9px;
+        font-size: 0.78rem;
+        gap: 4px;
+        flex-shrink: 0;
+        min-height: 30px;
+      }
+
+      /* 電源ドロップダウン: スマホ画面端で右側が切れないよう画面内に収める */
+      .power-dropdown {
+        position: fixed;
+        top: 48px;
+        right: 8px;
+        width: calc(100vw - 16px);
+        max-width: 280px;
+      }
+    }
+
+    /* 超小型画面スマートフォン (<= 420px: iPhone SE, 360px Android等) */
+    @media (max-width: 420px) {
+      header {
+        padding: 5px 8px;
+        gap: 4px;
+      }
+      .brand-icon {
+        width: 28px;
+        height: 28px;
+        font-size: 14px;
+      }
+      .brand-text h1 {
+        font-size: 0.82rem;
+        max-width: 95px;
+      }
+      .header-status {
+        gap: 4px;
+      }
+      .status-badge {
+        padding: 5px 5px;
+      }
+      .settings-btn, .power-btn {
+        padding: 4px 7px;
+        font-size: 0.74rem;
+        gap: 3px;
+      }
+      .settings-icon, .power-icon {
+        font-size: 0.85rem;
+      }
+    }
+
+    /* 極小画面 (<= 350px) */
+    @media (max-width: 350px) {
+      #wsStatusBadge {
+        display: none;
+      }
+      .settings-text, .power-text {
+        display: none;
+      }
+      .settings-btn, .power-btn {
+        padding: 4px 6px;
       }
     }
 
@@ -2042,33 +2194,33 @@
     </div>
 
     <div class="header-status">
-      <div class="status-badge" id="moodeStatusBadge">
+      <div class="status-badge" id="moodeStatusBadge" title="moOde audio (MPD) 接続状態">
         <div class="status-dot" id="moodeDot"></div>
-        <span id="moodeStatusText">moOde: 接続中...</span>
+        <span class="status-badge-text" id="moodeStatusText">moOde: 接続中...</span>
       </div>
 
-      <div class="status-badge" id="wsStatusBadge">
+      <div class="status-badge" id="wsStatusBadge" title="WebSocket 通信状態">
         <div class="status-dot" id="wsDot"></div>
-        <span id="wsStatusText">WebSocket</span>
+        <span class="status-badge-text" id="wsStatusText">WebSocket</span>
       </div>
 
-      <label class="toggle-wrapper" title="Webチャット時にもJetsonのスピーカーから声を出すか設定">
+      <label class="toggle-wrapper header-voice-toggle" id="voiceSpeakToggleWrapper" title="Webチャット時にもJetsonのスピーカーから声を出すか設定">
         <input type="checkbox" id="voiceSpeakToggle" checked style="display: none;">
         <div class="toggle-switch"></div>
-        <span>🔊 音声読み上げ</span>
+        <span class="toggle-label"><span class="toggle-icon">🔊</span><span class="toggle-label-text"> 音声読み上げ</span></span>
       </label>
 
       <!-- Settings Button -->
       <button class="settings-btn" id="settingsBtn" onclick="openSettingsModal()" title="システム設定 (デモモード / 言語 / 天気 / 接続先)">
         <span class="settings-icon">⚙️</span>
-        <span>設定</span>
+        <span class="settings-text">設定</span>
       </button>
 
       <!-- System Power Menu Button & Dropdown -->
       <div class="power-menu-wrapper" id="powerMenuWrapper">
         <button class="power-btn" id="powerBtn" onclick="togglePowerMenu(event)" title="Jetson システム電源操作 (再起動 / シャットダウン)">
           <span class="power-icon">⚡</span>
-          <span>電源</span>
+          <span class="power-text">電源</span>
         </button>
         <div class="power-dropdown" id="powerDropdown">
           <div class="power-dropdown-header">
