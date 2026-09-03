@@ -62,7 +62,7 @@ package "Jetson Orin Nano Super (voice_bot) - Edge Layer" as edge_layer {
     }
 
     package "Core Processing Engine (llm.py)" as core_engine {
-        component "llama.cpp (LLM)\n意図解析 / JSON Mode\n(Qwen 2.5 1.5B GGUF)" as LLM_PARSER
+        component "llama.cpp (LLM)\n意図解析 / JSON Mode\n(Gemma 4 / Qwen 等 GGUF)" as LLM_PARSER
         component "ルールベース判定\n(フォールバック)" as FALLBACK
         component "moOde コントローラ\n(mpd_client.py)" as DISPATCHER
     }

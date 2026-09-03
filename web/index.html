@@ -2263,7 +2263,7 @@
       <div class="panel-header">
         <div class="panel-title">
           <span>💬 AI Music Chat</span>
-          <span class="voice-badge">🤖 Qwen + Whisper + VOICEVOX</span>
+          <span class="voice-badge" id="aiModelBadge" title="AI Music Assistant">🤖 LLM + Whisper + Voice</span>
         </div>
       </div>
 
@@ -2867,15 +2867,58 @@
       };
     }
 
-    // Language Mode Elements
+    // Language & Model Badge Elements
     let currentLang = 'ja';
+    let currentLlmModel = '';
     const initialGreetingText = document.getElementById('initialGreetingText');
     const initialGreetingSource = document.getElementById('initialGreetingSource');
     const chipsContainer = document.getElementById('chipsContainer');
 
+    function updateAIModelBadge(llmModel, lang) {
+      if (llmModel !== undefined && llmModel !== null && llmModel !== '') {
+        currentLlmModel = llmModel;
+      }
+      if (lang) {
+        currentLang = lang;
+      }
+      const badge = document.getElementById('aiModelBadge');
+      if (!badge) return;
+
+      let modelLabel = 'LLM';
+      if (currentLlmModel) {
+        const m = String(currentLlmModel).toLowerCase();
+        if (m.includes('gemma-4') || m.includes('gemma_4') || m.includes('gemma4')) {
+          modelLabel = 'Gemma 4';
+        } else if (m.includes('gemma')) {
+          modelLabel = 'Gemma';
+        } else if (m.includes('qwen3') || m.includes('qwen-3')) {
+          modelLabel = 'Qwen 3';
+        } else if (m.includes('qwen2.5') || m.includes('qwen-2.5')) {
+          modelLabel = 'Qwen 2.5';
+        } else if (m.includes('qwen')) {
+          modelLabel = 'Qwen';
+        } else if (m.includes('llama-3') || m.includes('llama3')) {
+          modelLabel = 'Llama 3';
+        } else if (m.includes('llama')) {
+          modelLabel = 'Llama';
+        } else if (m.includes('phi')) {
+          modelLabel = 'Phi';
+        } else if (m.includes('mistral')) {
+          modelLabel = 'Mistral';
+        }
+      }
+
+      const ttsEngine = (currentLang === 'en') ? 'edge-tts' : 'VOICEVOX';
+      badge.textContent = `🤖 ${modelLabel} + Whisper + ${ttsEngine}`;
+      if (currentLlmModel) {
+        badge.title = `LLM Model: ${currentLlmModel} | Voice: ${ttsEngine}`;
+      }
+    }
+
     function updateLanguageMode(lang) {
       if (!lang) return;
       currentLang = lang;
+      updateAIModelBadge(currentLlmModel, lang);
 
       if (lang === 'en') {
         if (initialGreetingText) {
@@ -2941,11 +2984,15 @@
         if (data.moode_ip) {
           currentMoodeIp = data.moode_ip;
         }
-        updatePlayerUI(data.player_status);
-        updateVoiceStatus(data.voice_status, data.enable_voice_listener);
+        if (data.llm_model) {
+          currentLlmModel = data.llm_model;
+        }
         if (data.language) {
           updateLanguageMode(data.language);
         }
+        updateAIModelBadge(data.llm_model, data.language);
+        updatePlayerUI(data.player_status);
+        updateVoiceStatus(data.voice_status, data.enable_voice_listener);
         if (data.process_status) {
           updateProcessStatus(data.process_status);
         }
@@ -2966,6 +3013,10 @@
         if (data.settings) {
           if (data.settings.demo_mode !== undefined) {
             isDemoModeGlobal = !!data.settings.demo_mode;
+          }
+          if (data.settings.llm?.model) {
+            currentLlmModel = data.settings.llm.model;
+            updateAIModelBadge(currentLlmModel, currentLang);
           }
           if (data.settings.announcement?.language) {
             updateLanguageMode(data.settings.announcement.language);
@@ -3660,6 +3711,9 @@
             if (statusData.player_status) {
               updatePlayerUI(statusData.player_status);
             }
+            if (statusData.llm_model) {
+              updateAIModelBadge(statusData.llm_model, statusData.language);
+            }
           }
         } else {
           showToast('⚠️ 設定の保存に失敗しました');
@@ -3694,9 +3748,13 @@
         if (data.moode_ip) {
           currentMoodeIp = data.moode_ip;
         }
+        if (data.llm_model) {
+          currentLlmModel = data.llm_model;
+        }
         if (data.language) {
           updateLanguageMode(data.language);
         }
+        updateAIModelBadge(data.llm_model, data.language);
         if (data.player_status) {
           updatePlayerUI(data.player_status);
         }
