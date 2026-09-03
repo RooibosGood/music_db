@@ -2565,6 +2565,21 @@
             Raspberry Pi 5 上の moOde Audio (MPD) の IP アドレスおよびポート番号です。
           </div>
         </div>
+
+        <!-- moOde ライブラリ再スキャン (ReplayGain 反映) -->
+        <div class="settings-item-card">
+          <div class="settings-item-row">
+            <div class="settings-item-label">
+              <span>🎚️ ReplayGain タグ MPD 反映</span>
+            </div>
+            <button type="button" class="action-btn" id="btnUpdateMpdDb" onclick="triggerMpdDbUpdate()" style="padding: 6px 14px; font-size: 0.82rem; background: rgba(0, 242, 254, 0.15); border: 1px solid rgba(0, 242, 254, 0.4); border-radius: var(--radius-sm); color: #00f2fe; cursor: pointer; transition: all 0.2s;">
+              🔄 ライブラリ再スキャン
+            </button>
+          </div>
+          <div class="settings-item-desc">
+            Windows 等で音源に新しく付与した ReplayGain タグを、moOde (MPD) のデータベースに再読み込み（mpc update）させて即座に反映します。
+          </div>
+        </div>
       </div>
 
       <div class="settings-actions">
@@ -3720,6 +3735,34 @@
         }
       } catch (err) {
         showToast('⚠️ 設定保存エラー: ' + err.message);
+      }
+    }
+
+    // MPD Database Update (ReplayGain reflection)
+    async function triggerMpdDbUpdate() {
+      const btn = document.getElementById('btnUpdateMpdDb');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '🔄 スキャン中...';
+      }
+      showToast('🔄 moOde ライブラリの再スキャン (mpc update) を開始しました...');
+      try {
+        const res = await fetch('/api/player/update_db', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          showToast('✅ MPD ライブラリ更新をトリガーしました (Job: ' + (data.job_id || 'OK') + ')');
+        } else {
+          showToast('⚠️ 更新要求エラー: ' + (data.message || '失敗'));
+        }
+      } catch (e) {
+        showToast('⚠️ 更新エラー: ' + e.message);
+      } finally {
+        if (btn) {
+          setTimeout(() => {
+            btn.disabled = false;
+            btn.textContent = '🔄 ライブラリ再スキャン';
+          }, 2500);
+        }
       }
     }
 

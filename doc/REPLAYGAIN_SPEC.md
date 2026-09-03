@@ -123,16 +123,18 @@ ReplayGain タグが付加された楽曲は、以下の対応プレイヤー等
 - **Volumio / MoOde Audio / MPD**: 設定の ReplayGain モード（Album / Track）を有効化
 - **LMS (Lyrion Music Server / Squeezebox)**: ReplayGain 設定でスマートゲインを有効化
 
-### 6.1 `voice_bot` (Jetson 音声AIボット) との連携 (ReplayGain 有効化 ＋ 初期消音プレロール方式)
+### 6.1 `voice_bot` (Jetson 音声AIボット) との連携 (先行メタデータ更新 ＋ 初期消音フェードイン方式)
 moOde / MPD において ReplayGain タグの解析完了前に PCM 出力が先行して 0 dB の大音量飛び出しが発生する問題、および MPD の ReplayGain モードが無効（off）になっている問題を根本解消するため、`voice_bot` では以下の総合対策を採用しています。
 
 1. **MPD ReplayGain モードの常時保証 (`ensure_replaygain_mode`)**:
    - 再生開始前およびキュー更新時、MPD の `replay_gain_status()` を確認。
    - `replay_gain_mode` が `off` または未設定の場合、設定値（`config.REPLAYGAIN_MODE = "track"`）を自動送信して即座に有効化します。
-2. **初期ボリューム一時消音・復帰方式 (`safe_start_playback`)**:
+2. **選曲時の MPD データベース先行更新 (`client.update(file_path)`)**:
+   - 曲追加直後に先頭曲のファイルパスを MPD に更新要求。曲紹介アナウンス（約5〜15秒）中に MPD データベース（`tag_cache`）へ ReplayGain タグを先行登録します。
+3. **初期消音 ＋ 段階的スムーズ・フェードイン (`safe_start_playback`)**:
    - 停止（stop）状態から再生を開始する際、現在の音量（例: 70%）を退避し、一時的に MPD 音量を `0%`（完全消音）に設定。
    - 音量 0% の状態で `play()` を実行し、MPD のデコーダおよびファイルヘッダ解析スレッドを起動。
-   - ReplayGain タグ（Vorbis Comment / ID3v2）の解析と内部ゲインスケール演算が完了するまでの短時間（`config.PRE_DECODE_DELAY_SEC = 0.35` 秒）を完全無音で待機。
-   - ゲインスケール確定後、即座に本来の音量へ復帰。**第1サンプルから ReplayGain が100%適用された状態で音楽がスタート**します。
-3. **MPD ライブラリ更新トリガー (`update_mpd_database` / `/api/player/update_db`)**:
-   - 新規に ReplayGain タグを付与した音源の情報を MPD 内部データベースへ確実に反映させるため、REST API からワンクリックで `mpc update` を実行できるエンドポイントを提供しています。
+   - 完全消音のまま 0.40秒間待機して ReplayGain スケールを確定。
+   - その後、5段階（約0.3秒間）で本来の音量へスムーズにフェードイン復帰。**曲頭の音量飛び出しを完全排除し、自然かつ適正音量で立ち上がり**ます。
+4. **MPD ライブラリ更新トリガー (`update_mpd_database` / `/api/player/update_db`)**:
+   - 新規に ReplayGain タグを付与した音源の情報を MPD 内部データベースへ一括反映するため、Web UI 設定画面の「🔄 ライブラリ再スキャン」ボタンからワンクリックで `mpc update` を実行できます。

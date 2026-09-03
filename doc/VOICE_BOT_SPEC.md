@@ -441,31 +441,35 @@ ProcessCommand --> Idle : 処理実行・返答
     - `----:com.apple.iTunes:WM/SharedUserRating` (`1`〜`99`)
     - `rate` (`20`〜`100`) を保存。
 
-### 5.9 ReplayGain 確実適用と再生シーケンス制御 (初期消音プレロール方式)
+### 5.9 ReplayGain 確実適用と再生シーケンス制御 (先行メタデータ更新 ＋ 初期消音フェードイン方式)
 
-音源ファイルに付与されている ReplayGain（音量均一化タグ）を moOde / MPD 側が確実に有効化・反映し、NFSファイルヘッダ解析遅延による曲頭バースト（0 dB音量飛び出し）を防止するため、「**MPD ReplayGain モード保証 ➔ 初期ボリューム一時消音 ➔ 再生開始 ➔ ヘッダ解析待機 ➔ 本来の音量へ復帰**」という安全かつ確実なシーケンス制御を採用しています。
+音源ファイルに付与されている ReplayGain（音量均一化タグ）を moOde / MPD 側が確実に有効化・反映し、NFSファイルヘッダ解析遅延による曲頭バースト（0 dB音量飛び出し）を防止するため、「**MPD ReplayGain モード保証 ➔ 先頭曲の MPD メタデータ更新先行トリガー ➔ 初期ボリューム一時消音 ➔ 再生開始 ➔ ヘッダ解析待機 ➔ スムーズ・フェードイン復帰**」という安全かつ確実なシーケンス制御を採用しています。
 
 #### 1. 処理フローシーケンス
 1. **ステップ 1: MPD ReplayGain モードの常時保証 (`ensure_replaygain_mode`)**
    - MPD 接続時および再生開始時、`client.replay_gain_status()` を確認。
    - `replay_gain_mode` が `off` または未設定の場合、設定値（`config.REPLAYGAIN_MODE = "track"`）を自動送信して即座に有効化します。
-2. **ステップ 2: 初期ボリューム一時消音 ＋ デコーダ起動 (`safe_start_playback`)**
+2. **ステップ 2: 先頭曲の MPD データベース即時更新トリガー (`client.update(file_path)`)**
+   - 曲選択直後、キューの先頭曲の MPD 相対パスに対して `client.update(file_path)` を即座に発行。
+   - TTS による曲紹介アナウンス発話中（約5〜15秒）の裏で、MPD のデータベース（`tag_cache`）に ReplayGain タグを確実に先行キャッシュさせます。
+3. **ステップ 3: 初期ボリューム一時消音 ＋ デコーダ起動 (`safe_start_playback`)**
    - 停止（stop）状態から再生を開始する際、現在の音量（例: 70%）を退避し、一時的に MPD 音量を `0%`（完全消音）に設定。
    - 音量 0% の状態で `play()` を実行し、MPD のデコーダおよびファイルヘッダ解析スレッドを起動。
-   - ReplayGain タグ（Vorbis Comment / ID3v2）の解析と内部ゲインスケール演算が完了するまでの短時間（`config.PRE_DECODE_DELAY_SEC = 0.35` 秒）を完全無音で待機。
-3. **ステップ 3: 本来の音量へ復帰**
-   - ゲインスケール確定後、即座に本来の音量（例: 70%）へ復帰。**第1サンプルから ReplayGain が100%適用された状態で音楽がスタート**します。
-   - ※ボリューム制御不可（Bit-perfect / mixerなし）環境時は、アトミックポーズ方式に自動フォールバックします。
+   - ReplayGain タグ（Vorbis Comment / ID3v2）の解析と内部ゲインスケール確定までのマージン（`config.PRE_DECODE_DELAY_SEC = 0.40` 秒）を完全無音で待機。
+4. **ステップ 4: スムーズ・フェードインによる音量復帰**
+   - ゲインスケール確定後、本来の音量へ向けて 5段階（約0.3秒間）のスムーズな音量フェードインを実行。
+   - **急激な段差や 0 dB 音量飛び出しを完全排除し、曲頭が自然かつ ReplayGain 適用済みの適正音量で立ち上がり**ます。
+   - ※ボリューム制御不可（Bit-perfect / mixerなし / Fixed volume）環境時は、ALSAバッファの飛び出しを誘発する pause(1) は使わず、クリーンに play を実行します。
 
 #### 2. 提供関数
 - **`ensure_replaygain_mode(client=None)`**:
   MPD の ReplayGain モードを確認し、目標モード（`"track"`）へ設定・有効化。
 - **`safe_start_playback(client=None, pos=None, pre_decode_delay_sec=None)`**:
-  ReplayGain 有効化 ＋ 初期消音プレロールによる安全な再生開始を一元制御。
+  初期消音 ＋ 待機 ＋ スムーズ・フェードインによる安全な再生開始を一元制御。
 - **`play_single_track(file_path, pre_decode_delay_sec=None)`**:
-  単曲のキュークリア・追加・`safe_start_playback` を一括実行。
+  単曲のキュークリア・追加・MPDメタデータ先行更新・`safe_start_playback` を一括実行。
 - **`update_mpd_database()`**:
-  MPD ライブラリ更新（`mpc update`）を実行し、ReplayGain タグ変更を MPD 内部データベースへ反映。
+  MPD ライブラリ更新（`mpc update`）を実行し、ReplayGain タグ変更を MPD 内部データベースへ反映。Web UI 設定モーダルからワンクリックで実行可能。
 
 ---
 

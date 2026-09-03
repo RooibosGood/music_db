@@ -280,7 +280,7 @@ class MockMPDClient:
     def replay_gain_status(self) -> Dict[str, str]:
         return {"replay_gain_mode": self.replaygain_mode_val}
 
-    def update(self) -> int:
+    def update(self, uri: Optional[str] = None) -> int:
         return 1
 
 
@@ -439,7 +439,7 @@ def safe_start_playback(
     pre_decode_delay_sec: Optional[float] = None,
 ) -> bool:
     """ReplayGain を確実に適用し、曲頭の音量飛び出しを完全防止する安全な再生開始処理。
-    （ReplayGain 有効化 ＋ 初期ボリューム一時消音・復帰方式）
+    （ReplayGain 有効化 ＋ 初期ボリューム一時消音 ＋ スムーズ・フェードイン方式）
 
     シーケンス:
     1. MPD の ReplayGain モードが確実に有効化 ('track' 等) されていることを確認・設定。
@@ -450,11 +450,13 @@ def safe_start_playback(
          a. 現在の音量を退避（orig_vol）。
          b. 一時的に音量を 0 (完全消音) に設定し、ReplayGain未補正の曲頭PCM出力を遮断。
          c. play(pos) で再生を開始（MPDのデコーダが起動し、ReplayGainヘッダ解析とスケール演算を開始）。
-         d. 完全な無音状態で ReplayGain タグ解析完了まで微小待機（pre_decode_delay_sec: 0.35秒）。
-         e. 本来の音量（orig_vol）に復帰。第1サンプルから ReplayGain が100%適用された状態で音楽がスタート。
-    3. ボリューム制御不可（Bit-perfect / mixerなし）環境時は、アトミックポーズ方式に自動フォールバック。
+         d. 完全な無音状態で ReplayGain フィルタ初期化完了まで待機（0.40秒）。
+         e. スムーズ・フェードイン（5段階・約0.3秒）で本来の音量（orig_vol）へ復帰。
+            音量の急激な段差や飛び出しを完全排除し、曲頭が自然かつ適正音量で立ち上がります。
+    3. ボリューム制御不可（Bit-perfect / mixerなし / Fixed volume）環境時は、
+       PCMバーストを誘発する pause(1) は使わず、クリーンに play を実行。
     """
-    delay = pre_decode_delay_sec if pre_decode_delay_sec is not None else getattr(config, "PRE_DECODE_DELAY_SEC", 0.35)
+    delay = pre_decode_delay_sec if pre_decode_delay_sec is not None else getattr(config, "PRE_DECODE_DELAY_SEC", 0.40)
     own_client = False
     if client is None:
         client = get_mpd_client()
@@ -488,53 +490,47 @@ def safe_start_playback(
         has_volume = vol_str.isdigit() and int(vol_str) >= 0
         orig_vol = int(vol_str) if has_volume else None
 
-        # ボリューム制御が利用可能な場合: 初期消音 ➔ play ➔ ディレイ ➔ 音量復帰
+        # ボリューム制御が利用可能な場合: 初期消音 ➔ play ➔ 待機 ➔ スムーズ・フェードイン復帰
         if has_volume and orig_vol is not None and orig_vol > 0:
             try:
                 # A. 音量を 0 に設定（DACへのPCM出力を完全消音）
                 client.setvol(0)
 
-                # B. 再生を開始（デコーダ起動・ReplayGainヘッダ解析開始）
+                # B. 再生を開始（デコーダ起動・ReplayGainヘッダ解析とスケール確定を開始）
                 if pos is not None:
                     client.play(int(pos))
                 else:
                     client.play()
 
-                # C. 完全消音のまま ReplayGain 解析完了を待機
-                if delay > 0:
-                    time.sleep(delay)
+                # C. 完全消音のまま ReplayGain フィルタ初期化を待機
+                wait_sec = max(0.40, delay)
+                time.sleep(wait_sec)
 
-                # D. 本来の音量に復帰（ReplayGain が適用されたクリーンな音量でスタート）
-                client.setvol(orig_vol)
-                print(f"▶️ [moOde] ReplayGain 事前適用完了 (音量復帰: {orig_vol}%, 待機: {delay:.2f}秒)。", flush=True)
+                # D. スムーズ・フェードインで本来の音量に復帰（音量飛び出しを完全排除）
+                steps = 5
+                step_sleep = 0.06
+                for i in range(1, steps + 1):
+                    target_vol = int(orig_vol * (i / steps))
+                    try:
+                        client.setvol(target_vol)
+                    except Exception:
+                        pass
+                    if i < steps:
+                        time.sleep(step_sleep)
+
+                print(f"▶️ [moOde] ReplayGain 事前適用完了 (スムーズ音量復帰: {orig_vol}%, 待機: {wait_sec:.2f}秒)。", flush=True)
                 return True
             except Exception as vol_err:
-                print(f"⚠️ [moOde] ボリューム一時消音フォールバック: {vol_err}", flush=True)
+                print(f"⚠️ [moOde] ボリューム初期消音制御フォールバック: {vol_err}", flush=True)
 
-        # ボリューム制御不可（Bit-perfect / mixerなし）時のフォールバック:
-        try:
-            client.command_list_ok_begin()
-            if pos is not None:
-                client.play(int(pos))
-            else:
-                client.play()
-            client.pause(1)
-            client.command_list_end()
-        except Exception:
-            if pos is not None:
-                client.play(int(pos))
-            else:
-                client.play()
-            try:
-                client.pause(1)
-            except Exception:
-                pass
+        # ボリューム制御不可（Bit-perfect / mixerなし / Fixed volume）時:
+        # ※ play 直後に pause 1 を送ると ALSA バッファのバーストが発生するため、直接 play を実行
+        if pos is not None:
+            client.play(int(pos))
+        else:
+            client.play()
 
-        if delay > 0:
-            time.sleep(delay)
-
-        client.pause(0)
-        print(f"▶️ [moOde] 再生を開始しました (ReplayGain有効化済み、待機: {delay:.2f}秒)。", flush=True)
+        print("▶️ [moOde] 再生を開始しました (ReplayGain有効化済み)。", flush=True)
         return True
 
     except Exception as e:
@@ -560,7 +556,7 @@ def play_single_track(
     """単曲再生（キューのクリア -> 追加 -> safe_start_playback）。
     ReplayGainを確実に適用し、曲頭の音量飛び出しを完全防止する。
     """
-    delay = pre_decode_delay_sec if pre_decode_delay_sec is not None else getattr(config, "PRE_DECODE_DELAY_SEC", 0.35)
+    delay = pre_decode_delay_sec if pre_decode_delay_sec is not None else getattr(config, "PRE_DECODE_DELAY_SEC", 0.40)
     client = get_mpd_client()
     if client is None:
         print(f"❌ [play_single_track] MPD ({config.MOODE_IP}:{config.MOODE_PORT}) に接続できませんでした。", flush=True)
@@ -573,6 +569,10 @@ def play_single_track(
             pass
         client.clear()
         client.add(file_path)
+        try:
+            client.update(file_path)
+        except Exception:
+            pass
         return safe_start_playback(client, pos=0, pre_decode_delay_sec=delay)
     except Exception as e:
         print(f"❌ [play_single_track] 再生エラー: {e}", flush=True)
@@ -656,6 +656,13 @@ def control_moode(command: Dict[str, Any]) -> Dict[str, Any]:
                     first_mpd = playlist_items[0]
                     last_announced_file = first_mpd.get("file", first_file)
                     last_announced_songid = first_mpd.get("id", "")
+                    # 先頭曲の ReplayGain メタデータを MPD 内部データベース（tag_cache）へ即時反映
+                    if last_announced_file:
+                        try:
+                            client.update(last_announced_file)
+                            print(f"🔄 [moOde] 先頭曲の MPD メタデータ更新を先行トリガーしました: {last_announced_file}", flush=True)
+                        except Exception:
+                            pass
                 else:
                     last_announced_file = first_file
                     last_announced_songid = ""
