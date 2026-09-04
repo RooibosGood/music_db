@@ -13,13 +13,13 @@ Windows 環境および Linux / Jetson 環境の双方向で実行可能であ�
    - 可逆圧縮・非圧縮・不可逆圧縮の主要フォーマットをすべて網羅。
    - `mutagen` の `easy=True` インターフェースによる統一的な書き込みを基本としつつ、DSF（DSD ID3タグ）や特殊ヘッダのフォーマットには専用の書き込みフォールバックを実装。
 2. **柔軟なジャンル設定モード (`--mode`)**
-   - `overwrite` (デフォルト): 既存ジャンルを `"JAZZ"` に書き換え。既に `"JAZZ"` 単独の場合は書き込みをスキップ。
-   - `append`: 既存ジャンルを保持し、リストに `"JAZZ"` が含まれていなければ追加（例: `['Vocal']` -> `['Vocal', 'JAZZ']`）。
+   - `append` (デフォルト): 既存ジャンルを保持し、リストに `"JAZZ"` が含まれていなければ追加（例: `['Vocal']` -> `['Vocal', 'JAZZ']`）。
+   - `overwrite`: 既存ジャンルを `"JAZZ"` 単独に書き換え。
    - `if_empty`: ジャンルタグが未設定または空の場合のみ `"JAZZ"` を設定。
 3. **安全設計（Dry-Runモード）**
    - `--dry-run` オプションにより、実際にファイルを変更することなく、変更対象ファイルや更新前後のジャンルタグの差分プレビューを確認可能。
 4. **データベース同期機能 (`--update-db`)**
-   - オプション指定により、音楽ファイル本体のタグ更新と同時に、`music_meta.db` の `tracks` テーブルの `genre` カラムも一括更新可能。
+   - オプション指定により、音楽ファイル本体のタグ更新と同時に、`music_meta.db` の `tracks` テーブルの `genre` カラムも同期更新（既存ジャンルがある場合はカンマ区切りで追加）。
 5. **Windows 読み取り専用属性の自動解除**
    - ファイルに Read-Only 属性が付与されている場合でも、書き込み前に自動で書き込み許可属性を付与して安全に保存。
 
@@ -34,8 +34,8 @@ python set_jazz_genre.py [オプション]
 | 引数 | 型 | デフォルト値 | 説明 |
 | :--- | :---: | :--- | :--- |
 | `--target-dir` | 文字列 | `\\homenas\music\JAZZ` (Win)<br>`/mnt/music/JAZZ` (Linux) | スキャンおよび設定対象のフォルダパス |
-| `--genre` | 文字列 | `JAZZ` | 設定するジャンル文字列 |
-| `--mode` | 選択 | `overwrite` | 動作モード (`overwrite`, `append`, `if_empty`) |
+| `--genre` | 文字列 | `JAZZ` | 設定・追加するジャンル文字列 |
+| `--mode` | 選択 | `append` | 動作モード (`append`, `overwrite`, `if_empty`) |
 | `--dry-run` | フラグ | 無効 | 変更を適用せずシミュレーション表示 |
 | `--update-db` | フラグ | 無効 | `music_meta.db` の `tracks` テーブルの `genre` も同期更新 |
 | `--db-path` | 文字列 | `music_meta.db` | SQLite データベースファイルのパス |
@@ -53,14 +53,14 @@ python set_jazz_genre.py [オプション]
 python set_jazz_genre.py --dry-run --limit 10
 ```
 
-### 4.2 全ファイルを "JAZZ" で上書き更新
+### 4.2 既存ジャンルを維持しつつ "JAZZ" を追加（デフォルト動作）
 ```bash
 python set_jazz_genre.py
 ```
 
-### 4.3 既存ジャンルを維持しつつ "JAZZ" を追加
+### 4.3 全ファイルを "JAZZ" 単独で上書きしたい場合
 ```bash
-python set_jazz_genre.py --mode append
+python set_jazz_genre.py --mode overwrite
 ```
 
 ### 4.4 ファイルタグと同時にデータベースも更新

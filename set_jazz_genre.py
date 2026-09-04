@@ -216,26 +216,45 @@ def write_genre_tag(file_path: str, new_genres: List[str]) -> bool:
     return False
 
 
-def update_db_genre(conn: sqlite3.Connection, file_path: str, new_genre_str: str) -> int:
-    """music_meta.db の tracks テーブルの genre を更新"""
+def update_db_genre(conn: sqlite3.Connection, file_path: str, target_genre: str, mode: str = "append") -> int:
+    """music_meta.db の tracks テーブルの genre を更新（モードに応じた追加・上書き）"""
     cur = conn.cursor()
-    
-    # 1. 完全一致
-    cur.execute("UPDATE tracks SET genre = ? WHERE file_path = ?", (new_genre_str, file_path))
-    if cur.rowcount > 0:
-        return cur.rowcount
-
-    # 2. パス区切り文字の違い（Windows \\ と Unix /）を吸収
     normalized_path = file_path.replace('/', '\\')
-    cur.execute("UPDATE tracks SET genre = ? WHERE REPLACE(file_path, '/', '\\') = ?", (new_genre_str, normalized_path))
-    if cur.rowcount > 0:
-        return cur.rowcount
-
-    # 3. 相対パスまたはファイル名での部分一致照合
     file_name = os.path.basename(file_path)
-    cur.execute("UPDATE tracks SET genre = ? WHERE file_path LIKE ? AND file_path LIKE '%JAZZ%'",
-                (new_genre_str, f"%{file_name}"))
-    return cur.rowcount
+
+    # 対象レコードの既存 genre を取得
+    cur.execute("SELECT id, genre FROM tracks WHERE file_path = ? OR REPLACE(file_path, '/', '\\') = ?", (file_path, normalized_path))
+    rows = cur.fetchall()
+    if not rows:
+        cur.execute("SELECT id, genre FROM tracks WHERE file_path LIKE ? AND file_path LIKE '%JAZZ%'", (f"%{file_name}",))
+        rows = cur.fetchall()
+
+    if not rows:
+        return 0
+
+    updated_count = 0
+    for track_id, current_genre in rows:
+        current_genre_str = current_genre.strip() if current_genre else ""
+
+        if mode == "overwrite":
+            new_val = target_genre
+        elif mode == "if_empty":
+            if not current_genre_str:
+                new_val = target_genre
+            else:
+                continue
+        else:  # append (デフォルト)
+            parts = [p.strip() for p in current_genre_str.split(',') if p.strip()]
+            if any(p.upper() == target_genre.upper() for p in parts):
+                continue
+            parts.append(target_genre)
+            new_val = ", ".join(parts)
+
+        if new_val != current_genre_str:
+            cur.execute("UPDATE tracks SET genre = ? WHERE id = ?", (new_val, track_id))
+            updated_count += cur.rowcount
+
+    return updated_count
 
 
 def scan_and_collect_files(target_dir: str) -> List[str]:
@@ -254,23 +273,23 @@ def scan_and_collect_files(target_dir: str) -> List[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="NAS music/JAZZ フォルダ配下の楽曲ファイルのジャンルタグに 'JAZZ' を設定するスクリプト",
+        description="NAS music/JAZZ フォルダ配下の楽曲ファイルのジャンルタグに 'JAZZ' を追加・設定するスクリプト",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 使用例:
   # 1. プレビュー確認 (変更を保存しない)
   python set_jazz_genre.py --dry-run --limit 10
 
-  # 2. 全ファイルを "JAZZ" で上書き設定
+  # 2. 現在のGenreを維持しつつ "JAZZ" を追加 (デフォルト動作)
   python set_jazz_genre.py
 
-  # 3. 既存ジャンルを維持しつつ "JAZZ" を追加 (例: Vocal -> Vocal, JAZZ)
-  python set_jazz_genre.py --mode append
+  # 3. 既存のGenreを "JAZZ" 単独で上書きしたい場合
+  python set_jazz_genre.py --mode overwrite
 
-  # 4. ジャンル未設定の曲のみ "JAZZ" を設定
+  # 4. ジャンル未設定の曲のみ "JAZZ" を設定したい場合
   python set_jazz_genre.py --mode if_empty
 
-  # 5. ファイルタグ更新と同時に music_meta.db も更新
+  # 5. ファイルタグ更新と同時に music_meta.db も更新 (DB既存ジャンルにも追記)
   python set_jazz_genre.py --update-db
 
   # 6. 対象フォルダを直接指定
@@ -287,13 +306,13 @@ def main():
     parser.add_argument(
         "--genre",
         default=DEFAULT_GENRE,
-        help=f"設定するジャンル名 (デフォルト: '{DEFAULT_GENRE}')"
+        help=f"設定・追加するジャンル名 (デフォルト: '{DEFAULT_GENRE}')"
     )
     parser.add_argument(
         "--mode",
-        choices=["overwrite", "append", "if_empty"],
-        default="overwrite",
-        help="ジャンル設定モード: overwrite (上書き), append (追記), if_empty (未設定時のみ) (デフォルト: overwrite)"
+        choices=["append", "overwrite", "if_empty"],
+        default="append",
+        help="ジャンル設定モード: append (現在のGenreに追加・デフォルト), overwrite (上書き), if_empty (未設定時のみ) (デフォルト: append)"
     )
     parser.add_argument(
         "--dry-run",
@@ -431,7 +450,7 @@ def main():
                     # DB更新
                     if db_conn:
                         try:
-                            rows = update_db_genre(db_conn, file_path, target_db_genre)
+                            rows = update_db_genre(db_conn, file_path, target_db_genre, mode=args.mode)
                             count_db_updated += rows
                         except Exception as e:
                             print(f"    [DB Error] {e}")
